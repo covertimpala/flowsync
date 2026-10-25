@@ -1,14 +1,21 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from ..db import get_session
 from ..models import BudgetCategory, BudgetEntry, BudgetEntryType
 from ..schemas import BudgetCategoryCreate, BudgetEntryCreate
 from ..security import require_api_key
+from ..services.excel_import import ExcelImportError, ParsedImport, parse_workbook
 
 router = APIRouter(prefix="/api/budget", tags=["budget"], dependencies=[Depends(require_api_key)])
+
+# Parsed-but-not-yet-committed imports, keyed by import_id. Local
+# single-process app, so an in-memory cache is fine — it's just the gap
+# between showing the preview and the user clicking "Import" (or not).
+_pending_imports: dict[str, ParsedImport] = {}
 
 
 @router.get("/categories", response_model=list[BudgetCategory])
@@ -70,3 +77,95 @@ def summary(year: int, month: int, session: Session = Depends(get_session)) -> d
         net += e.amount_cents if e.type == BudgetEntryType.income else -e.amount_cents
 
     return {"by_category": by_category, "net_cents": net}
+
+
+@router.get("/history")
+def history(months: int = 6, session: Session = Depends(get_session)) -> dict:
+    """Per-month net + total spend for the last `months` months, for the
+    trend chart on the Budget page."""
+    now = datetime.now()
+    points = []
+    for i in range(months - 1, -1, -1):
+        month_index = now.month - 1 - i
+        year = now.year + month_index // 12
+        month = month_index % 12 + 1
+        start = datetime(year, month, 1)
+        end = datetime(year + (month == 12), (month % 12) + 1, 1)
+        entries = session.exec(
+            select(BudgetEntry).where(BudgetEntry.date >= start, BudgetEntry.date < end)
+        ).all()
+        spent = sum(e.amount_cents for e in entries if e.type == BudgetEntryType.expense)
+        income = sum(e.amount_cents for e in entries if e.type == BudgetEntryType.income)
+        points.append({
+            "year": year, "month": month,
+            "spent_cents": spent, "income_cents": income, "net_cents": income - spent,
+        })
+    return {"points": points}
+
+
+class ImportCommitRequest(BaseModel):
+    import_id: str
+    default_category_name: str = "Imported"
+
+
+@router.post("/import/preview")
+async def import_preview(file: UploadFile = File(...)) -> dict:
+    content = await file.read()
+    try:
+        parsed = parse_workbook(content)
+    except ExcelImportError as e:
+        raise HTTPException(400, str(e))
+
+    _pending_imports[parsed.import_id] = parsed
+    # Keep the cache small — this is a convenience buffer, not storage.
+    if len(_pending_imports) > 20:
+        _pending_imports.pop(next(iter(_pending_imports)))
+
+    return {
+        "import_id": parsed.import_id,
+        "sheet": parsed.sheet,
+        "header_row": parsed.header_row,
+        "columns": parsed.columns,
+        "total_rows_found": parsed.total_rows_found,
+        "parsed_count": len(parsed.transactions),
+        "skipped_rows": parsed.skipped_rows,
+        "preview": parsed.preview(),
+        "detected_categories": sorted({t.category for t in parsed.transactions if t.category}),
+    }
+
+
+@router.post("/import/commit")
+def import_commit(body: ImportCommitRequest, session: Session = Depends(get_session)) -> dict:
+    parsed = _pending_imports.get(body.import_id)
+    if parsed is None:
+        raise HTTPException(404, "That import has expired — upload the file again.")
+
+    category_cache: dict[str, BudgetCategory] = {}
+
+    def get_or_create_category(name: str) -> BudgetCategory:
+        if name in category_cache:
+            return category_cache[name]
+        existing = session.exec(select(BudgetCategory).where(BudgetCategory.name == name)).first()
+        category = existing or BudgetCategory(name=name)
+        if not existing:
+            session.add(category)
+            session.commit()
+            session.refresh(category)
+        category_cache[name] = category
+        return category
+
+    created = 0
+    for t in parsed.transactions:
+        category = get_or_create_category(t.category or body.default_category_name)
+        session.add(BudgetEntry(
+            category_id=category.id,
+            amount_cents=t.amount_cents,
+            type=BudgetEntryType(t.type),
+            date=t.date,
+            note=t.note,
+        ))
+        created += 1
+    session.commit()
+
+    del _pending_imports[body.import_id]
+    return {"created": created, "categories_used": list(category_cache.keys())}

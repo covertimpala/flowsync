@@ -88,7 +88,7 @@ export function HabitsPage() {
       </form>
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <h3>Rewards</h3>
+        <div className="card-title">Rewards</div>
         {rewards.map((r) => (
           <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0' }}>
             <span style={{ flex: 1 }}>{r.name}</span>

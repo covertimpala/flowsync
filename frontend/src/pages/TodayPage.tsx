@@ -1,3 +1,4 @@
+import { Sparkles } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api/client';
 import { PendingSection } from '../components/PendingSection';
@@ -53,10 +54,15 @@ export function TodayPage() {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
-        <h1 style={{ flex: 1 }}>Today</h1>
-        <button className="btn" onClick={askAi} disabled={asking}>
-          {asking ? 'Thinking…' : '✨ Ask AI for suggestions'}
+      <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 20 }}>
+        <div style={{ flex: 1 }}>
+          <h1>Today</h1>
+          <p className="page-subtitle" style={{ marginBottom: 0 }}>
+            {new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}
+          </p>
+        </div>
+        <button className="btn btn-primary" onClick={askAi} disabled={asking}>
+          <Sparkles size={14} /> {asking ? 'Thinking…' : 'Ask AI for suggestions'}
         </button>
       </div>
 
@@ -69,7 +75,7 @@ export function TodayPage() {
       <PendingSection pending={pending} onChanged={load} />
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <h3>Timeline</h3>
+        <div className="card-title">Timeline</div>
         {schedule.events.length === 0 && schedule.planned.length === 0 && (
           <p style={{ color: 'var(--text-dim)' }}>Nothing scheduled yet.</p>
         )}
@@ -90,7 +96,7 @@ export function TodayPage() {
 
       {schedule.unscheduled.length > 0 && (
         <div className="card" style={{ marginBottom: 20 }}>
-          <h3>Couldn't fit today</h3>
+          <div className="card-title">Couldn't fit today</div>
           {schedule.unscheduled.map((t) => (
             <TimelineRow
               key={`unsched-${t.id}`}

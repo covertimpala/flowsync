@@ -96,9 +96,10 @@ export function CalendarPage() {
   return (
     <div>
       <h1>Calendar</h1>
+      <p className="page-subtitle">Local events, plus anything synced from Google or Outlook</p>
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <h3>Connect a calendar</h3>
+        <div className="card-title">Connect a calendar</div>
         <ProviderRow
           name="Google Calendar"
           status={googleStatus}
@@ -149,7 +150,7 @@ export function CalendarPage() {
       </div>
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <h3>Next 14 days</h3>
+        <div className="card-title">Next 14 days</div>
         {events.length === 0 && <p style={{ color: 'var(--text-dim)' }}>No events.</p>}
         {events.map((e) => (
           <div key={e.id} style={{ display: 'flex', gap: 10, padding: '6px 0', alignItems: 'center' }}>

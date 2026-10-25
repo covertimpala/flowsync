@@ -41,9 +41,10 @@ export function SettingsPage() {
   return (
     <div>
       <h1>Settings</h1>
+      <p className="page-subtitle">API access, and the local AI model used for suggestions</p>
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <h3>API access for other applications</h3>
+        <div className="card-title">API access for other applications</div>
         <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>
           Any application can read/write FlowSync data by sending this key as an{' '}
           <code>X-API-Key</code> header. Items it creates land in the Pending inbox on the Today
@@ -69,7 +70,7 @@ export function SettingsPage() {
       </div>
 
       <form className="card" onSubmit={saveOllama} style={{ marginBottom: 20 }}>
-        <h3>AI suggestions (Ollama)</h3>
+        <div className="card-title">AI suggestions (Ollama)</div>
         <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>
           Status:{' '}
           {ollamaStatus?.available ? (
