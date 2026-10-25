@@ -1,3 +1,4 @@
+import { Repeat } from 'lucide-react';
 import { TaskCheckbox } from './TaskCheckbox';
 import type { ScheduleResponse, TaskCategory, TaskPriority } from '../types';
 
@@ -34,6 +35,8 @@ export function DayTimeline({
           kind="Task"
           done={p.task.completed}
           dueDate={p.task.due_date}
+          recurrence={p.task.recurrence}
+          wasRescheduled={p.task.was_rescheduled}
           category={p.task.category_id ? categoryById.get(p.task.category_id) : undefined}
           onToggle={(origin) => onToggleTask(p.task.id, p.task.completed, origin)}
         />
@@ -46,6 +49,8 @@ export function DayTimeline({
           kind="Task"
           done={t.completed}
           dueDate={t.due_date}
+          recurrence={t.recurrence}
+          wasRescheduled={t.was_rescheduled}
           category={t.category_id ? categoryById.get(t.category_id) : undefined}
           onToggle={(origin) => onToggleTask(t.id, t.completed, origin)}
         />
@@ -62,6 +67,8 @@ function TimelineRow({
   onToggle,
   category,
   dueDate,
+  recurrence,
+  wasRescheduled,
 }: {
   time: string;
   title: string;
@@ -70,11 +77,23 @@ function TimelineRow({
   onToggle?: (origin: { x: number; y: number }) => void;
   category?: TaskCategory;
   dueDate?: string | null;
+  recurrence?: string;
+  wasRescheduled?: boolean;
 }) {
   const overdue = !done && !!dueDate && new Date(dueDate) < new Date();
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '7px 8px',
+        borderRadius: 6,
+        background: wasRescheduled ? 'rgba(227, 166, 72, 0.08)' : 'transparent',
+        borderLeft: wasRescheduled ? '2px solid var(--warning)' : '2px solid transparent',
+      }}
+    >
       {onToggle ? (
         <TaskCheckbox checked={!!done} onToggle={(_, origin) => onToggle(origin)} />
       ) : (
@@ -82,9 +101,13 @@ function TimelineRow({
       )}
       <span style={{ width: 150, color: 'var(--text-dim)', fontSize: 13 }}>{time}</span>
       <span style={{ color: 'var(--text-dim)', fontSize: 11, width: 40 }}>{kind}</span>
-      <span style={{ textDecoration: done ? 'line-through' : 'none', color: done ? 'var(--text-dim)' : 'var(--text)', flex: 1 }}>
+      <span style={{ textDecoration: done ? 'line-through' : 'none', color: done ? 'var(--text-dim)' : 'var(--text)', flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
         {title}
+        {recurrence && recurrence !== 'none' && (
+          <Repeat size={12} color="var(--text-faint)" aria-label={`Repeats ${recurrence}`} />
+        )}
       </span>
+      {wasRescheduled && !done && <span className="badge badge-warning">Pushed</span>}
       {dueDate && !done && (
         <span className={`badge ${overdue ? 'badge-danger' : ''}`}>
           Due {new Date(dueDate).toLocaleDateString([], { month: 'short', day: 'numeric' })}

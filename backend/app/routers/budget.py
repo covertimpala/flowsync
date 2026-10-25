@@ -6,9 +6,10 @@ from sqlmodel import Session, select
 
 from ..db import get_session
 from ..models import BudgetCategory, BudgetEntry, BudgetEntryType
-from ..schemas import BudgetCategoryCreate, BudgetEntryCreate
+from ..schemas import BudgetCategoryCreate, BudgetEntryCreate, BudgetEntryUpdate
 from ..security import require_api_key
 from ..services.excel_import import ExcelImportError, ParsedImport, parse_workbook
+from ..services.note_grouping import group_notes
 from ..time_utils import as_naive_local
 
 router = APIRouter(prefix="/api/budget", tags=["budget"], dependencies=[Depends(require_api_key)])
@@ -34,11 +35,27 @@ def create_category(body: BudgetCategoryCreate, session: Session = Depends(get_s
 
 
 @router.get("/entries", response_model=list[BudgetEntry])
-def list_entries(start: datetime, end: datetime, session: Session = Depends(get_session)):
+def list_entries(
+    start: datetime, end: datetime, include_hidden: bool = False, session: Session = Depends(get_session)
+):
     start, end = as_naive_local(start), as_naive_local(end)
-    return session.exec(
-        select(BudgetEntry).where(BudgetEntry.date >= start, BudgetEntry.date < end).order_by(BudgetEntry.date.desc())
-    ).all()
+    query = select(BudgetEntry).where(BudgetEntry.date >= start, BudgetEntry.date < end)
+    if not include_hidden:
+        query = query.where(BudgetEntry.hidden == False)  # noqa: E712
+    return session.exec(query.order_by(BudgetEntry.date.desc())).all()
+
+
+@router.patch("/entries/{entry_id}", response_model=BudgetEntry)
+def update_entry(entry_id: int, body: BudgetEntryUpdate, session: Session = Depends(get_session)):
+    entry = session.get(BudgetEntry, entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry not found")
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(entry, key, value)
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+    return entry
 
 
 @router.get("/bounds")
@@ -72,7 +89,7 @@ def delete_entry(entry_id: int, session: Session = Depends(get_session)):
 
 @router.get("/summary")
 def summary(start: datetime, end: datetime, session: Session = Depends(get_session)) -> dict:
-    entries = list_entries(start, end, session)
+    entries = list_entries(start=start, end=end, session=session)
     categories = session.exec(select(BudgetCategory)).all()
 
     by_category = []
@@ -126,7 +143,11 @@ def history(start: datetime, end: datetime, session: Session = Depends(get_sessi
         else:
             cursor = _next_month(cursor)
 
-    entries = session.exec(select(BudgetEntry).where(BudgetEntry.date >= start, BudgetEntry.date < end)).all()
+    entries = session.exec(
+        select(BudgetEntry).where(
+            BudgetEntry.date >= start, BudgetEntry.date < end, BudgetEntry.hidden == False  # noqa: E712
+        )
+    ).all()
     for e in entries:
         b = bucket_key(e.date)
         bucket = buckets.setdefault(b, {"spent_cents": 0, "income_cents": 0})
@@ -145,6 +166,48 @@ def history(start: datetime, end: datetime, session: Session = Depends(get_sessi
         for b, data in sorted(buckets.items())
     ]
     return {"granularity": granularity, "points": points}
+
+
+@router.get("/analytics")
+def analytics(start: datetime, end: datetime, session: Session = Depends(get_session)) -> dict:
+    """Average spend per day/week/month/year over the range (matching the
+    pivot-table-style summary the original spreadsheet had), plus
+    spend-by-year and the top grouped items by total spend."""
+    start, end = as_naive_local(start), as_naive_local(end)
+    entries = session.exec(
+        select(BudgetEntry).where(
+            BudgetEntry.date >= start, BudgetEntry.date < end, BudgetEntry.hidden == False  # noqa: E712
+        )
+    ).all()
+    expenses = [e for e in entries if e.type == BudgetEntryType.expense]
+    total_spent = sum(e.amount_cents for e in expenses)
+
+    span_days = max(1, (end - start).days)
+    averages = {
+        "per_day_cents": round(total_spent / span_days),
+        "per_week_cents": round(total_spent / span_days * 7),
+        "per_month_cents": round(total_spent / span_days * 30.44),
+        "per_year_cents": round(total_spent / span_days * 365.25),
+    }
+
+    by_year: dict[int, int] = {}
+    for e in expenses:
+        by_year[e.date.year] = by_year.get(e.date.year, 0) + e.amount_cents
+    spend_by_year = [{"year": y, "spent_cents": c} for y, c in sorted(by_year.items())]
+
+    groups = group_notes([(e.note, e.amount_cents) for e in expenses])
+    top_items = [
+        {"label": g.label, "count": g.count, "total_cents": g.total_cents, "variants": g.notes}
+        for g in groups[:15]
+    ]
+
+    return {
+        "total_spent_cents": total_spent,
+        "entry_count": len(expenses),
+        "averages": averages,
+        "spend_by_year": spend_by_year,
+        "top_items": top_items,
+    }
 
 
 class ImportCommitRequest(BaseModel):

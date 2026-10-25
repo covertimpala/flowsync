@@ -4,9 +4,17 @@ import { api, ApiError } from '../api/client';
 import { DayTimeline } from '../components/DayTimeline';
 import { PendingSection } from '../components/PendingSection';
 import { celebrateTaskCompletion } from '../lib/celebrate';
-import type { PendingInbox, ScheduleResponse, TaskCategory } from '../types';
+import type { PendingInbox, RecurrenceRule, ScheduleResponse, TaskCategory } from '../types';
 
 const CATEGORY_PALETTE = ['#6c8dfa', '#45c586', '#e3a648', '#c89bf8', '#68d4f5', '#f0565c', '#f0a868'];
+
+const RECURRENCE_OPTIONS: { value: RecurrenceRule; label: string }[] = [
+  { value: 'none', label: "Doesn't repeat" },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'yearly', label: 'Yearly' },
+];
 
 export function TodayPage() {
   const [schedule, setSchedule] = useState<ScheduleResponse | null>(null);
@@ -14,6 +22,7 @@ export function TodayPage() {
   const [categories, setCategories] = useState<TaskCategory[]>([]);
   const [newTitle, setNewTitle] = useState('');
   const [newDueDate, setNewDueDate] = useState('');
+  const [newRecurrence, setNewRecurrence] = useState<RecurrenceRule>('none');
   const [newCategoryId, setNewCategoryId] = useState<number | ''>('');
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -54,9 +63,11 @@ export function TodayPage() {
       title: newTitle.trim(),
       category_id: newCategoryId === '' ? null : newCategoryId,
       due_date: newDueDate ? new Date(newDueDate).toISOString() : null,
+      recurrence: newRecurrence,
     });
     setNewTitle('');
     setNewDueDate('');
+    setNewRecurrence('none');
     load();
   }
 
@@ -141,6 +152,18 @@ export function TodayPage() {
           title="Due date (optional)"
           style={{ colorScheme: 'dark' }}
         />
+        <select
+          value={newRecurrence}
+          onChange={(e) => setNewRecurrence(e.target.value as RecurrenceRule)}
+          title="Repeat"
+          style={{ maxWidth: 140 }}
+        >
+          {RECURRENCE_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
         <select
           value={newCategoryId}
           onChange={(e) => setNewCategoryId(e.target.value ? Number(e.target.value) : '')}

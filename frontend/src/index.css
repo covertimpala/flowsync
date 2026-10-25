@@ -160,6 +160,7 @@ input::placeholder, textarea::placeholder {
 .badge-api { color: #68d4f5; border-color: #255064; background: rgba(104, 212, 245, 0.08); }
 .badge-success { color: var(--success); border-color: var(--success-soft); background: var(--success-soft); }
 .badge-danger { color: var(--danger); border-color: var(--danger-soft); background: var(--danger-soft); }
+.badge-warning { color: var(--warning); border-color: rgba(227, 166, 72, 0.3); background: rgba(227, 166, 72, 0.1); }
 
 .stat-tile {
   background: var(--panel-2);

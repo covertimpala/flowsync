@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import ItemStatus, Task, TaskCategory, TaskOrigin
+from ..models import ItemStatus, RecurrenceRule, Task, TaskCategory, TaskOrigin
 from ..schemas import TaskCategoryCreate, TaskCreate, TaskUpdate
 from ..security import require_api_key
+from ..services.recurrence import next_occurrence
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"], dependencies=[Depends(require_api_key)])
 
@@ -72,11 +73,28 @@ def update_task(task_id: int, body: TaskUpdate, session: Session = Depends(get_s
     if not task:
         raise HTTPException(404, "Task not found")
     updates = body.model_dump(exclude_unset=True)
+
+    just_completed = updates.get("completed") is True and not task.completed
     if "completed" in updates:
         updates["completed_at"] = datetime.now() if updates["completed"] else None
+
     for key, value in updates.items():
         setattr(task, key, value)
     session.add(task)
+
+    if just_completed and task.recurrence != RecurrenceRule.none:
+        next_due = next_occurrence(task.due_date or datetime.now(), task.recurrence)
+        session.add(Task(
+            title=task.title,
+            notes=task.notes,
+            due_date=next_due,
+            estimated_minutes=task.estimated_minutes,
+            priority=task.priority,
+            category_id=task.category_id,
+            recurrence=task.recurrence,
+            origin=task.origin,
+        ))
+
     session.commit()
     session.refresh(task)
     return task

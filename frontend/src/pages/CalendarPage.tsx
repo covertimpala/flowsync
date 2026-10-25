@@ -358,6 +358,9 @@ export function CalendarPage() {
                       >
                         {item.task.title}
                       </span>
+                      {item.task.was_rescheduled && !item.task.completed && (
+                        <span className="badge badge-warning">Pushed</span>
+                      )}
                     </div>
                   ),
                 )}

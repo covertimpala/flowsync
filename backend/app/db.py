@@ -12,19 +12,41 @@ def _add_missing_columns() -> None:
     (like Task.category_id) would silently vanish against a database that
     was created before that field existed. This is FlowSync's one-person
     answer to a schema migration tool: for every known table, add whatever
-    columns the model declares that the actual table is missing. Safe
-    because every field added after a table's first release is, and must
-    stay, nullable or defaulted — there's no data to backfill it with."""
+    columns the model declares that the actual table is missing.
+
+    SQLite's ALTER TABLE ADD COLUMN leaves every *existing* row's new
+    column NULL, regardless of the model's Python-level default — so a
+    bool field like `hidden: bool = False` silently becomes NULL, not
+    False, on old rows. That's not just cosmetic: a query filtering
+    `hidden == False` never matches SQL NULL, so old rows vanish from
+    every list; and a non-Optional enum field like Task.recurrence fails
+    to validate as NULL when a row is serialized back out. So every added
+    column with a plain scalar default gets backfilled on the rows that
+    were just given it.
+    """
     with engine.connect() as conn:
         for table in SQLModel.metadata.sorted_tables:
             existing = {row[1] for row in conn.execute(text(f'PRAGMA table_info("{table.name}")'))}
             if not existing:
                 continue  # table doesn't exist yet — create_all will make it whole
             for column in table.columns:
-                if column.name in existing:
-                    continue
-                col_type = column.type.compile(engine.dialect)
-                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}'))
+                if column.name not in existing:
+                    col_type = column.type.compile(engine.dialect)
+                    conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}'))
+
+                # Backfill unconditionally, not just for columns just added
+                # above — a column added by an earlier run of this same
+                # (previously buggy) migration can already have NULLs
+                # sitting in the database that this run needs to fix too.
+                default = column.default
+                if default is not None and getattr(default, "is_scalar", False):
+                    value = default.arg
+                    if isinstance(value, bool):
+                        value = int(value)
+                    conn.execute(
+                        text(f'UPDATE "{table.name}" SET "{column.name}" = :val WHERE "{column.name}" IS NULL'),
+                        {"val": value},
+                    )
         conn.commit()
 
 

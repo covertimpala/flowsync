@@ -1,8 +1,10 @@
-import { FileSpreadsheet, Upload } from 'lucide-react';
+import { Eye, EyeOff, FileSpreadsheet, Upload } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   Cell,
   Legend,
@@ -43,6 +45,19 @@ interface HistoryPoint {
   net_cents: number;
 }
 
+interface AnalyticsData {
+  total_spent_cents: number;
+  entry_count: number;
+  averages: {
+    per_day_cents: number;
+    per_week_cents: number;
+    per_month_cents: number;
+    per_year_cents: number;
+  };
+  spend_by_year: { year: number; spent_cents: number }[];
+  top_items: { label: string; count: number; total_cents: number; variants: string[] }[];
+}
+
 interface ImportPreview {
   import_id: string;
   sheet: string;
@@ -62,6 +77,8 @@ export function BudgetPage() {
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [historyGranularity, setHistoryGranularity] = useState<HistoryGranularity>('day');
   const [entries, setEntries] = useState<BudgetEntry[]>([]);
+  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const [bounds, setBounds] = useState<{ earliest: string | null; latest: string | null }>({
     earliest: null,
     latest: null,
@@ -113,14 +130,15 @@ export function BudgetPage() {
   async function load() {
     const startIso = range.start.toISOString();
     const endIso = range.end.toISOString();
-    const [s, c, h, e, b] = await Promise.all([
+    const [s, c, h, e, b, a] = await Promise.all([
       api.get<BudgetSummary>(`/api/budget/summary?start=${startIso}&end=${endIso}`),
       api.get<BudgetCategory[]>('/api/budget/categories'),
       api.get<{ granularity: HistoryGranularity; points: HistoryPoint[] }>(
         `/api/budget/history?start=${startIso}&end=${endIso}`,
       ),
-      api.get<BudgetEntry[]>(`/api/budget/entries?start=${startIso}&end=${endIso}`),
+      api.get<BudgetEntry[]>(`/api/budget/entries?start=${startIso}&end=${endIso}&include_hidden=true`),
       api.get<{ earliest: string | null; latest: string | null }>('/api/budget/bounds'),
+      api.get<AnalyticsData>(`/api/budget/analytics?start=${startIso}&end=${endIso}`),
     ]);
     setSummary(s);
     setCategories(c);
@@ -128,6 +146,7 @@ export function BudgetPage() {
     setHistoryGranularity(h.granularity);
     setEntries(e);
     setBounds(b);
+    setAnalytics(a);
     if (!entryCategory && c.length) setEntryCategory(c[0].id);
   }
 
@@ -190,6 +209,11 @@ export function BudgetPage() {
     load();
   }
 
+  async function toggleHidden(id: number, hidden: boolean) {
+    await api.patch(`/api/budget/entries/${id}`, { hidden: !hidden });
+    load();
+  }
+
   async function commitImport() {
     if (!importPreview) return;
     setCommitting(true);
@@ -232,17 +256,22 @@ export function BudgetPage() {
   const trendTitle =
     historyGranularity === 'day' ? 'Daily trend' : historyGranularity === 'week' ? 'Weekly trend' : 'Monthly trend';
 
-  const totalSpent = entries.filter((e) => e.type === 'expense').reduce((a, e) => a + e.amount_cents, 0);
-  const totalIncome = entries.filter((e) => e.type === 'income').reduce((a, e) => a + e.amount_cents, 0);
+  const visibleEntries = entries.filter((e) => !e.hidden);
+  const totalSpent = visibleEntries.filter((e) => e.type === 'expense').reduce((a, e) => a + e.amount_cents, 0);
+  const totalIncome = visibleEntries.filter((e) => e.type === 'income').reduce((a, e) => a + e.amount_cents, 0);
   const categoryById = new Map(categories.map((c) => [c.id, c]));
 
   const earliestLabel = bounds.earliest ? new Date(bounds.earliest).toLocaleDateString() : null;
   const latestLabel = bounds.latest ? new Date(bounds.latest).toLocaleDateString() : null;
 
-  const filteredEntries =
-    transactionFilter === 'all' ? entries : entries.filter((e) => e.category_id === transactionFilter);
+  const filteredEntries = entries
+    .filter((e) => showHidden || !e.hidden)
+    .filter((e) => transactionFilter === 'all' || e.category_id === transactionFilter);
   const totalPages = Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE));
   const pagedEntries = filteredEntries.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const hiddenCount = entries.filter((e) => e.hidden).length;
+
+  const yearData = (analytics?.spend_by_year ?? []).map((p) => ({ year: String(p.year), Spent: p.spent_cents / 100 }));
 
   return (
     <div>
@@ -359,6 +388,71 @@ export function BudgetPage() {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {analytics && (
+        <>
+          <div className="grid-3" style={{ marginBottom: 20 }}>
+            <div className="stat-tile">
+              <div className="label">Avg. per day</div>
+              <div className="value">{money(analytics.averages.per_day_cents)}</div>
+            </div>
+            <div className="stat-tile">
+              <div className="label">Avg. per week</div>
+              <div className="value">{money(analytics.averages.per_week_cents)}</div>
+            </div>
+            <div className="stat-tile">
+              <div className="label">Avg. per year</div>
+              <div className="value">{money(analytics.averages.per_year_cents)}</div>
+            </div>
+          </div>
+
+          <div className="grid-2" style={{ marginBottom: 20 }}>
+            {yearData.length > 1 && (
+              <div className="card">
+                <div className="card-title">Spend by year</div>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={yearData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
+                    <XAxis dataKey="year" stroke="var(--text-faint)" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis stroke="var(--text-faint)" fontSize={12} tickLine={false} axisLine={false} width={40} />
+                    <Tooltip
+                      contentStyle={{ background: 'var(--panel-2)', border: '1px solid var(--border)', borderRadius: 8 }}
+                      formatter={(v: number) => `$${v.toFixed(2)}`}
+                    />
+                    <Bar dataKey="Spent" fill="#6c8dfa" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            <div className="card" style={yearData.length <= 1 ? { gridColumn: '1 / -1' } : undefined}>
+              <div className="card-title">Top items</div>
+              <p style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: -6, marginBottom: 10 }}>
+                Similar notes (typos, variants) are grouped together automatically.
+              </p>
+              {analytics.top_items.length === 0 ? (
+                <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No notes to group yet.</p>
+              ) : (
+                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                  {analytics.top_items.map((item) => (
+                    <div key={item.label} className="row" style={{ justifyContent: 'space-between', padding: '5px 0' }}>
+                      <span style={{ fontSize: 13 }} title={item.variants.join(', ')}>
+                        {item.label}
+                        {item.variants.length > 1 && (
+                          <span style={{ color: 'var(--text-faint)', fontSize: 11 }}> (+{item.variants.length - 1} variant{item.variants.length > 2 ? 's' : ''})</span>
+                        )}
+                      </span>
+                      <span style={{ fontSize: 13, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+                        {item.count}× · {money(item.total_cents)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-title">Import a spreadsheet</div>
@@ -483,78 +577,6 @@ export function BudgetPage() {
         ))}
       </div>
 
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
-          <div className="card-title" style={{ marginBottom: 0 }}>
-            All entries ({entries.length})
-          </div>
-          <select value={transactionFilter} onChange={(e) => { setTransactionFilter(Number(e.target.value) || 'all'); setPage(0); }}>
-            <option value="all">All categories</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </div>
-
-        {filteredEntries.length === 0 ? (
-          <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No entries in this range.</p>
-        ) : (
-          <>
-            <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ textAlign: 'left', color: 'var(--text-dim)', fontSize: 12 }}>
-                  <th style={{ padding: '6px 8px' }}>Date</th>
-                  <th style={{ padding: '6px 8px' }}>Category</th>
-                  <th style={{ padding: '6px 8px' }}>Type</th>
-                  <th style={{ padding: '6px 8px' }}>Note</th>
-                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>Amount</th>
-                  <th style={{ padding: '6px 8px' }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {pagedEntries.map((e) => (
-                  <tr key={e.id} style={{ borderTop: '1px solid var(--border-soft)' }}>
-                    <td style={{ padding: '6px 8px', color: 'var(--text-dim)' }}>
-                      {new Date(e.date).toLocaleDateString()}
-                    </td>
-                    <td style={{ padding: '6px 8px' }}>{categoryById.get(e.category_id)?.name ?? '—'}</td>
-                    <td style={{ padding: '6px 8px' }}>
-                      <span className={`badge ${e.type === 'income' ? 'badge-success' : ''}`}>{e.type}</span>
-                    </td>
-                    <td style={{ padding: '6px 8px', color: 'var(--text-dim)' }}>{e.note ?? ''}</td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
-                      {e.type === 'income' ? '+' : '−'}{money(e.amount_cents)}
-                    </td>
-                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>
-                      <button
-                        className="btn btn-ghost"
-                        style={{ padding: '2px 8px', fontSize: 12 }}
-                        onClick={() => deleteEntry(e.id)}
-                      >
-                        ✕
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            {totalPages > 1 && (
-              <div className="row" style={{ justifyContent: 'center', marginTop: 14 }}>
-                <button className="btn" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
-                  Previous
-                </button>
-                <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
-                  Page {page + 1} of {totalPages}
-                </span>
-                <button className="btn" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>
-                  Next
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
 
       <div className="grid-2">
         <form className="card" onSubmit={addEntry} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -588,6 +610,98 @@ export function BudgetPage() {
           />
           <button className="btn" type="submit">Add category</button>
         </form>
+      </div>
+
+      <div className="card" style={{ marginTop: 20 }}>
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+          <div className="card-title" style={{ marginBottom: 0 }}>
+            All entries ({filteredEntries.length}
+            {hiddenCount > 0 && !showHidden && ` of ${entries.length}`})
+          </div>
+          <div className="row">
+            {hiddenCount > 0 && (
+              <label className="row" style={{ fontSize: 13, color: 'var(--text-dim)', gap: 6, cursor: 'pointer' }}>
+                <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
+                Show {hiddenCount} hidden
+              </label>
+            )}
+            <select value={transactionFilter} onChange={(e) => { setTransactionFilter(Number(e.target.value) || 'all'); setPage(0); }}>
+              <option value="all">All categories</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {filteredEntries.length === 0 ? (
+          <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No entries in this range.</p>
+        ) : (
+          <>
+            <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--text-dim)', fontSize: 12 }}>
+                  <th style={{ padding: '6px 8px' }}>Date</th>
+                  <th style={{ padding: '6px 8px' }}>Category</th>
+                  <th style={{ padding: '6px 8px' }}>Type</th>
+                  <th style={{ padding: '6px 8px' }}>Note</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>Amount</th>
+                  <th style={{ padding: '6px 8px' }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pagedEntries.map((e) => (
+                  <tr key={e.id} style={{ borderTop: '1px solid var(--border-soft)', opacity: e.hidden ? 0.45 : 1 }}>
+                    <td style={{ padding: '6px 8px', color: 'var(--text-dim)' }}>
+                      {new Date(e.date).toLocaleDateString()}
+                    </td>
+                    <td style={{ padding: '6px 8px' }}>{categoryById.get(e.category_id)?.name ?? '—'}</td>
+                    <td style={{ padding: '6px 8px' }}>
+                      <span className={`badge ${e.type === 'income' ? 'badge-success' : ''}`}>{e.type}</span>
+                    </td>
+                    <td style={{ padding: '6px 8px', color: 'var(--text-dim)' }}>{e.note ?? ''}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
+                      {e.type === 'income' ? '+' : '−'}{money(e.amount_cents)}
+                    </td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                      <div className="row" style={{ justifyContent: 'flex-end', gap: 2 }}>
+                        <button
+                          className="btn btn-ghost"
+                          style={{ padding: '2px 6px' }}
+                          title={e.hidden ? 'Unhide' : 'Hide'}
+                          onClick={() => toggleHidden(e.id, e.hidden)}
+                        >
+                          {e.hidden ? <Eye size={13} /> : <EyeOff size={13} />}
+                        </button>
+                        <button
+                          className="btn btn-ghost"
+                          style={{ padding: '2px 8px', fontSize: 12 }}
+                          onClick={() => deleteEntry(e.id)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {totalPages > 1 && (
+              <div className="row" style={{ justifyContent: 'center', marginTop: 14 }}>
+                <button className="btn" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+                  Previous
+                </button>
+                <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+                  Page {page + 1} of {totalPages}
+                </span>
+                <button className="btn" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>
+                  Next
+                </button>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

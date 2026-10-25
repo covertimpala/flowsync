@@ -4,6 +4,7 @@ export type CalendarSource = 'local' | 'ai' | 'api' | 'google' | 'outlook' | 'ic
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type HabitFrequency = 'daily' | 'weekly' | 'custom';
 export type BudgetEntryType = 'expense' | 'income';
+export type RecurrenceRule = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 export interface Task {
   id: number;
@@ -16,6 +17,8 @@ export interface Task {
   scheduled_start: string | null;
   scheduled_end: string | null;
   category_id: number | null;
+  recurrence: RecurrenceRule;
+  was_rescheduled: boolean;
   origin: TaskOrigin;
   status: ItemStatus;
   created_by: string | null;
@@ -86,6 +89,7 @@ export interface BudgetEntry {
   type: BudgetEntryType;
   date: string;
   note: string | null;
+  hidden: boolean;
 }
 
 export interface CategorySpend {

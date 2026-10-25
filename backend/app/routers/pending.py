@@ -73,6 +73,7 @@ def accept_reschedule(suggestion_id: int, session: Session = Depends(get_session
 
     task.scheduled_start = suggestion.suggested_start
     task.scheduled_end = suggestion.suggested_end
+    task.was_rescheduled = True
     session.add(task)
     session.delete(suggestion)
     session.commit()

@@ -8,6 +8,7 @@ from .models import (
     CalendarSource,
     HabitFrequency,
     ItemStatus,
+    RecurrenceRule,
     TaskPriority,
 )
 
@@ -19,6 +20,7 @@ class TaskCreate(BaseModel):
     estimated_minutes: int = 30
     priority: TaskPriority = TaskPriority.medium
     category_id: Optional[int] = None
+    recurrence: RecurrenceRule = RecurrenceRule.none
 
 
 class TaskUpdate(BaseModel):
@@ -31,6 +33,7 @@ class TaskUpdate(BaseModel):
     scheduled_start: Optional[datetime] = None
     scheduled_end: Optional[datetime] = None
     category_id: Optional[int] = None
+    recurrence: Optional[RecurrenceRule] = None
 
 
 class TaskCategoryCreate(BaseModel):
@@ -71,6 +74,15 @@ class BudgetEntryCreate(BaseModel):
     type: BudgetEntryType
     date: datetime
     note: Optional[str] = None
+
+
+class BudgetEntryUpdate(BaseModel):
+    category_id: Optional[int] = None
+    amount_cents: Optional[int] = None
+    type: Optional[BudgetEntryType] = None
+    date: Optional[datetime] = None
+    note: Optional[str] = None
+    hidden: Optional[bool] = None
 
 
 class AcceptRequest(BaseModel):

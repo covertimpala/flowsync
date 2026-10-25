@@ -43,6 +43,14 @@ class TaskPriority(str, Enum):
     high = "high"
 
 
+class RecurrenceRule(str, Enum):
+    none = "none"
+    daily = "daily"
+    weekly = "weekly"
+    monthly = "monthly"
+    yearly = "yearly"
+
+
 # ---------------------------------------------------------------------------
 # Calendar
 # ---------------------------------------------------------------------------
@@ -91,6 +99,11 @@ class Task(SQLModel, table=True):
     scheduled_start: Optional[NaiveDatetime] = None
     scheduled_end: Optional[NaiveDatetime] = None
     category_id: Optional[int] = Field(default=None, foreign_key="taskcategory.id")
+    recurrence: RecurrenceRule = RecurrenceRule.none
+    # True once an AI reschedule suggestion has been accepted for this task
+    # — shown as a distinct "Pushed" badge so it's clear this isn't where
+    # it was originally planned.
+    was_rescheduled: bool = False
 
     origin: TaskOrigin = TaskOrigin.local
     status: ItemStatus = ItemStatus.confirmed
@@ -181,6 +194,10 @@ class BudgetEntry(SQLModel, table=True):
     type: BudgetEntryType
     date: NaiveDatetime
     note: Optional[str] = None
+    # Soft-hidden entries (e.g. duplicates, test rows, reimbursed
+    # purchases) drop out of the list and every total/average by default,
+    # without losing the underlying data — see GET .../entries?include_hidden=.
+    hidden: bool = False
 
 
 # ---------------------------------------------------------------------------
