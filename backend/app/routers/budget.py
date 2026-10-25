@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ from ..models import BudgetCategory, BudgetEntry, BudgetEntryType
 from ..schemas import BudgetCategoryCreate, BudgetEntryCreate
 from ..security import require_api_key
 from ..services.excel_import import ExcelImportError, ParsedImport, parse_workbook
+from ..time_utils import as_naive_local
 
 router = APIRouter(prefix="/api/budget", tags=["budget"], dependencies=[Depends(require_api_key)])
 
@@ -34,6 +35,7 @@ def create_category(body: BudgetCategoryCreate, session: Session = Depends(get_s
 
 @router.get("/entries", response_model=list[BudgetEntry])
 def list_entries(start: datetime, end: datetime, session: Session = Depends(get_session)):
+    start, end = as_naive_local(start), as_naive_local(end)
     return session.exec(
         select(BudgetEntry).where(BudgetEntry.date >= start, BudgetEntry.date < end).order_by(BudgetEntry.date.desc())
     ).all()
@@ -88,28 +90,61 @@ def summary(start: datetime, end: datetime, session: Session = Depends(get_sessi
     return {"by_category": by_category, "net_cents": net}
 
 
+def _next_month(d: datetime) -> datetime:
+    return datetime(d.year + (d.month == 12), d.month % 12 + 1, 1)
+
+
 @router.get("/history")
-def history(months: int = 6, session: Session = Depends(get_session)) -> dict:
-    """Per-month net + total spend for the last `months` months, for the
-    trend chart on the Budget page."""
-    now = datetime.now()
-    points = []
-    for i in range(months - 1, -1, -1):
-        month_index = now.month - 1 - i
-        year = now.year + month_index // 12
-        month = month_index % 12 + 1
-        start = datetime(year, month, 1)
-        end = datetime(year + (month == 12), (month % 12) + 1, 1)
-        entries = session.exec(
-            select(BudgetEntry).where(BudgetEntry.date >= start, BudgetEntry.date < end)
-        ).all()
-        spent = sum(e.amount_cents for e in entries if e.type == BudgetEntryType.expense)
-        income = sum(e.amount_cents for e in entries if e.type == BudgetEntryType.income)
-        points.append({
-            "year": year, "month": month,
-            "spent_cents": spent, "income_cents": income, "net_cents": income - spent,
-        })
-    return {"points": points}
+def history(start: datetime, end: datetime, session: Session = Depends(get_session)) -> dict:
+    """Spend/income bucketed over [start, end) for the trend chart — daily
+    buckets for a short range (a month or less), weekly for a few months,
+    monthly beyond that, so "this month" shows actual daily movement
+    instead of a single flat monthly bar."""
+    start, end = as_naive_local(start), as_naive_local(end)
+    span_days = max(1, (end - start).days)
+    granularity = "day" if span_days <= 31 else "week" if span_days <= 183 else "month"
+
+    def bucket_key(dt: datetime) -> datetime:
+        d = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        if granularity == "day":
+            return d
+        if granularity == "week":
+            return d - timedelta(days=d.weekday())  # Monday of that week
+        return d.replace(day=1)
+
+    # Pre-seed every bucket in range so empty days/weeks/months still show
+    # as zero points rather than being skipped on the chart.
+    buckets: dict[datetime, dict[str, int]] = {}
+    cursor = bucket_key(start)
+    last = bucket_key(end - timedelta(microseconds=1))
+    while cursor <= last:
+        buckets[cursor] = {"spent_cents": 0, "income_cents": 0}
+        if granularity == "day":
+            cursor += timedelta(days=1)
+        elif granularity == "week":
+            cursor += timedelta(days=7)
+        else:
+            cursor = _next_month(cursor)
+
+    entries = session.exec(select(BudgetEntry).where(BudgetEntry.date >= start, BudgetEntry.date < end)).all()
+    for e in entries:
+        b = bucket_key(e.date)
+        bucket = buckets.setdefault(b, {"spent_cents": 0, "income_cents": 0})
+        if e.type == BudgetEntryType.expense:
+            bucket["spent_cents"] += e.amount_cents
+        else:
+            bucket["income_cents"] += e.amount_cents
+
+    points = [
+        {
+            "date": b.isoformat(),
+            "spent_cents": data["spent_cents"],
+            "income_cents": data["income_cents"],
+            "net_cents": data["income_cents"] - data["spent_cents"],
+        }
+        for b, data in sorted(buckets.items())
+    ]
+    return {"granularity": granularity, "points": points}
 
 
 class ImportCommitRequest(BaseModel):

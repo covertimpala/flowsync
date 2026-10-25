@@ -9,6 +9,7 @@ from ..models import CalendarEvent, CalendarSource, ItemStatus
 from ..schemas import EventCreate, IcsImportRequest
 from ..security import require_api_key
 from ..services.ics_import import parse_ics
+from ..time_utils import as_naive_local
 
 router = APIRouter(prefix="/api/events", tags=["events"], dependencies=[Depends(require_api_key)])
 
@@ -20,6 +21,7 @@ def list_events(
     include_pending: bool = False,
     session: Session = Depends(get_session),
 ):
+    start, end = as_naive_local(start), as_naive_local(end)
     query = select(CalendarEvent).where(CalendarEvent.start < end, CalendarEvent.end > start)
     if not include_pending:
         query = query.where(CalendarEvent.status == ItemStatus.confirmed)

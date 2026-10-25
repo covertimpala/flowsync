@@ -4,17 +4,7 @@ from datetime import datetime, timedelta
 from sqlmodel import Session, select
 
 from ..models import CalendarEvent, ItemStatus, Task
-from .scheduler import SchedulerEngine, TimeSlot
-
-
-@dataclass
-class _Busy:
-    """A free_slots_for()-compatible stand-in for an already-scheduled task
-    — it only ever reads .start/.end, so this is cheaper than constructing
-    a real CalendarEvent for something that's never persisted."""
-
-    start: datetime
-    end: datetime
+from .scheduler import Busy, SchedulerEngine, TimeSlot
 
 
 @dataclass
@@ -67,7 +57,7 @@ def find_opening(
             )
         ).all()
 
-        busy = list(events) + [_Busy(t.scheduled_start, t.scheduled_end) for t in other_tasks]
+        busy = list(events) + [Busy(t.scheduled_start, t.scheduled_end) for t in other_tasks]
         free_slots = scheduler.free_slots_for(day, busy)
         free_minutes = sum(s.duration.total_seconds() / 60 for s in free_slots)
         workload_ratio = 1 - (free_minutes / window_minutes if window_minutes else 0)

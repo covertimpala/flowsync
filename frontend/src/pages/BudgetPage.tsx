@@ -34,13 +34,10 @@ const TIMESCALE_OPTIONS: { value: Timescale; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ];
 
-function monthsBetween(start: Date, end: Date): number {
-  return (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1;
-}
+type HistoryGranularity = 'day' | 'week' | 'month';
 
 interface HistoryPoint {
-  year: number;
-  month: number;
+  date: string;
   spent_cents: number;
   income_cents: number;
   net_cents: number;
@@ -63,6 +60,7 @@ export function BudgetPage() {
   const [summary, setSummary] = useState<BudgetSummary | null>(null);
   const [categories, setCategories] = useState<BudgetCategory[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [historyGranularity, setHistoryGranularity] = useState<HistoryGranularity>('day');
   const [entries, setEntries] = useState<BudgetEntry[]>([]);
   const [bounds, setBounds] = useState<{ earliest: string | null; latest: string | null }>({
     earliest: null,
@@ -107,9 +105,9 @@ export function BudgetPage() {
       start = customStart ? new Date(customStart) : new Date(now.getFullYear(), now.getMonth(), 1);
       const customEndDate = customEnd ? new Date(customEnd) : end;
       label = 'Custom range';
-      return { start, end: customEndDate, label, months: Math.max(1, monthsBetween(start, customEndDate)) };
+      return { start, end: customEndDate, label };
     }
-    return { start, end, label, months: Math.max(1, monthsBetween(start, end)) };
+    return { start, end, label };
   }, [timescale, customStart, customEnd, bounds.earliest, now.getFullYear(), now.getMonth(), now.getDate()]);
 
   async function load() {
@@ -118,13 +116,16 @@ export function BudgetPage() {
     const [s, c, h, e, b] = await Promise.all([
       api.get<BudgetSummary>(`/api/budget/summary?start=${startIso}&end=${endIso}`),
       api.get<BudgetCategory[]>('/api/budget/categories'),
-      api.get<{ points: HistoryPoint[] }>(`/api/budget/history?months=${Math.min(range.months, 36)}`),
+      api.get<{ granularity: HistoryGranularity; points: HistoryPoint[] }>(
+        `/api/budget/history?start=${startIso}&end=${endIso}`,
+      ),
       api.get<BudgetEntry[]>(`/api/budget/entries?start=${startIso}&end=${endIso}`),
       api.get<{ earliest: string | null; latest: string | null }>('/api/budget/bounds'),
     ]);
     setSummary(s);
     setCategories(c);
     setHistory(h.points);
+    setHistoryGranularity(h.granularity);
     setEntries(e);
     setBounds(b);
     if (!entryCategory && c.length) setEntryCategory(c[0].id);
@@ -212,12 +213,24 @@ export function BudgetPage() {
     .filter((cs) => cs.spent_cents > 0)
     .map((cs) => ({ name: cs.category.name, value: cs.spent_cents / 100 }));
 
-  const spansMultipleYears = history.length > 0 && history[0].year !== history[history.length - 1].year;
-  const trendData = history.map((p) => ({
-    label: spansMultipleYears ? `${MONTH_NAMES[p.month - 1]} '${String(p.year).slice(2)}` : MONTH_NAMES[p.month - 1],
-    Spent: p.spent_cents / 100,
-    Income: p.income_cents / 100,
-  }));
+  const spansMultipleYears =
+    history.length > 0 && new Date(history[0].date).getFullYear() !== new Date(history[history.length - 1].date).getFullYear();
+  const trendData = history.map((p) => {
+    const d = new Date(p.date);
+    let label: string;
+    if (historyGranularity === 'day') {
+      label = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    } else if (historyGranularity === 'week') {
+      label = `Wk of ${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+    } else {
+      label = spansMultipleYears
+        ? `${MONTH_NAMES[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`
+        : MONTH_NAMES[d.getMonth()];
+    }
+    return { label, Spent: p.spent_cents / 100, Income: p.income_cents / 100 };
+  });
+  const trendTitle =
+    historyGranularity === 'day' ? 'Daily trend' : historyGranularity === 'week' ? 'Weekly trend' : 'Monthly trend';
 
   const totalSpent = entries.filter((e) => e.type === 'expense').reduce((a, e) => a + e.amount_cents, 0);
   const totalIncome = entries.filter((e) => e.type === 'income').reduce((a, e) => a + e.amount_cents, 0);
@@ -312,7 +325,7 @@ export function BudgetPage() {
         </div>
 
         <div className="card">
-          <div className="card-title">6-month trend</div>
+          <div className="card-title">{trendTitle}</div>
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={trendData}>
               <defs>
@@ -326,7 +339,15 @@ export function BudgetPage() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-soft)" vertical={false} />
-              <XAxis dataKey="label" stroke="var(--text-faint)" fontSize={12} tickLine={false} axisLine={false} />
+              <XAxis
+                dataKey="label"
+                stroke="var(--text-faint)"
+                fontSize={12}
+                tickLine={false}
+                axisLine={false}
+                interval="preserveStartEnd"
+                minTickGap={24}
+              />
               <YAxis stroke="var(--text-faint)" fontSize={12} tickLine={false} axisLine={false} width={40} />
               <Tooltip
                 contentStyle={{ background: 'var(--panel-2)', border: '1px solid var(--border)', borderRadius: 8 }}

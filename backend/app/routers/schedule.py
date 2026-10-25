@@ -1,20 +1,24 @@
 from datetime import date as date_cls
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..db import get_session
 from ..models import CalendarEvent, ItemStatus, Task
 from ..security import require_api_key
-from ..services.scheduler import SchedulerEngine
+from ..services.scheduler import Busy, SchedulerEngine
 
 router = APIRouter(prefix="/api/schedule", tags=["schedule"], dependencies=[Depends(require_api_key)])
 
+_PRIORITY_RANK = {"high": 0, "medium": 1, "low": 2}
 
-@router.get("")
-def get_schedule(for_date: date_cls | None = None, session: Session = Depends(get_session)) -> dict:
-    day = datetime.combine(for_date or date_cls.today(), datetime.min.time())
+
+def _day_schedule(session: Session, day: datetime) -> dict:
+    """Core single-day schedule computation — shared by the single-day and
+    date-range endpoints so there's exactly one place that knows how
+    events, anchored tasks, the auto-planner, and completed-today tasks
+    fit together."""
     day_start, day_end = day, day + timedelta(days=1)
 
     events = session.exec(
@@ -54,10 +58,13 @@ def get_schedule(for_date: date_cls | None = None, session: Session = Depends(ge
     )
 
     unscheduled_input = never_scheduled
-    priority_rank = {"high": 0, "medium": 1, "low": 2}
-    unscheduled_input.sort(key=lambda t: (priority_rank[t.priority], t.due_date or datetime.max))
+    unscheduled_input.sort(key=lambda t: (_PRIORITY_RANK[t.priority], t.due_date or datetime.max))
 
-    plan = SchedulerEngine().plan(day, unscheduled_input, events)
+    # Anchored tasks already occupy real time today — the auto-planner has
+    # to see them as busy too, or it'll happily hand a brand-new task the
+    # exact same slot an already-scheduled one is sitting in.
+    busy_for_planning = list(events) + [Busy(t.scheduled_start, t.scheduled_end) for t in anchored_today]
+    plan = SchedulerEngine().plan(day, unscheduled_input, busy_for_planning)
     scheduled_ids = set(plan.keys())
 
     planned = [{"task": t, "start": t.scheduled_start, "end": t.scheduled_end} for t in anchored_today]
@@ -98,3 +105,28 @@ def get_schedule(for_date: date_cls | None = None, session: Session = Depends(ge
 
     planned.sort(key=lambda p: p["start"])
     return {"events": events, "planned": planned, "unscheduled": unscheduled}
+
+
+@router.get("")
+def get_schedule(for_date: date_cls | None = None, session: Session = Depends(get_session)) -> dict:
+    day = datetime.combine(for_date or date_cls.today(), datetime.min.time())
+    return _day_schedule(session, day)
+
+
+@router.get("/range")
+def get_schedule_range(start: date_cls, end: date_cls, session: Session = Depends(get_session)) -> dict:
+    """The same per-day breakdown as GET /api/schedule, for every day from
+    `start` to `end` inclusive — what the Schedule page renders as a
+    multi-day agenda instead of fetching one day at a time."""
+    if end < start:
+        raise HTTPException(400, "end must not be before start")
+    if (end - start).days > 60:
+        raise HTTPException(400, "range too large — ask for 60 days or fewer at a time")
+
+    days = []
+    cursor = start
+    while cursor <= end:
+        day_dt = datetime.combine(cursor, datetime.min.time())
+        days.append({"date": cursor.isoformat(), **_day_schedule(session, day_dt)})
+        cursor += timedelta(days=1)
+    return {"days": days}

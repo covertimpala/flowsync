@@ -1,7 +1,9 @@
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api/client';
-import type { CalendarEvent, DeviceCodeInfo } from '../types';
+import { TaskCheckbox } from '../components/TaskCheckbox';
+import { celebrateTaskCompletion } from '../lib/celebrate';
+import type { CalendarEvent, DeviceCodeInfo, Task } from '../types';
 
 function startOfDay(d: Date) {
   const r = new Date(d);
@@ -21,6 +23,7 @@ const TIMESCALE_OPTIONS: { value: Timescale; label: string }[] = [
 
 export function CalendarPage() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [tasksWithDueDates, setTasksWithDueDates] = useState<Task[]>([]);
   const [bounds, setBounds] = useState<{ earliest: string | null; latest: string | null }>({
     earliest: null,
     latest: null,
@@ -87,13 +90,17 @@ export function CalendarPage() {
 
   async function load() {
     const qs = `start=${range.start.toISOString()}&end=${range.end.toISOString()}`;
-    const [ev, g, o, b] = await Promise.all([
+    const [ev, tasks, g, o, b] = await Promise.all([
       api.get<CalendarEvent[]>(`/api/events?${qs}`),
+      api.get<Task[]>('/api/tasks'),
       api.get(`/api/calendar/google/status`),
       api.get(`/api/calendar/outlook/status`),
       api.get<{ earliest: string | null; latest: string | null }>('/api/events/bounds'),
     ]);
     setEvents(ev);
+    setTasksWithDueDates(
+      tasks.filter((t) => t.due_date && new Date(t.due_date) >= range.start && new Date(t.due_date) < range.end),
+    );
     setGoogleStatus(g as any);
     setOutlookStatus(o as any);
     setBounds(b);
@@ -122,6 +129,13 @@ export function CalendarPage() {
 
   async function deleteEvent(id: number) {
     await api.delete(`/api/events/${id}`);
+    load();
+  }
+
+  async function toggleTask(id: number, completed: boolean, origin: { x: number; y: number }) {
+    const completing = !completed;
+    await api.patch(`/api/tasks/${id}`, { completed: completing });
+    if (completing) celebrateTaskCompletion(origin);
     load();
   }
 
@@ -165,15 +179,25 @@ export function CalendarPage() {
     load();
   }
 
+  type DayItem = { kind: 'event'; event: CalendarEvent; time: string } | { kind: 'task'; task: Task; time: string };
+
   const groups = useMemo(() => {
-    const byDay = new Map<string, CalendarEvent[]>();
+    const byDay = new Map<string, DayItem[]>();
     for (const e of events) {
       const key = new Date(e.start).toDateString();
       if (!byDay.has(key)) byDay.set(key, []);
-      byDay.get(key)!.push(e);
+      byDay.get(key)!.push({ kind: 'event', event: e, time: e.start });
     }
-    return Array.from(byDay.entries());
-  }, [events]);
+    for (const t of tasksWithDueDates) {
+      const key = new Date(t.due_date!).toDateString();
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key)!.push({ kind: 'task', task: t, time: t.due_date! });
+    }
+    for (const items of byDay.values()) {
+      items.sort((a, b) => a.time.localeCompare(b.time));
+    }
+    return Array.from(byDay.entries()).sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime());
+  }, [events, tasksWithDueDates]);
 
   const earliestLabel = bounds.earliest ? new Date(bounds.earliest).toLocaleDateString() : null;
   const latestLabel = bounds.latest ? new Date(bounds.latest).toLocaleDateString() : null;
@@ -184,7 +208,9 @@ export function CalendarPage() {
         <div>
           <h1>Calendar</h1>
           <p className="page-subtitle" style={{ marginBottom: 0 }}>
-            {events.length} events · {range.label}
+            {events.length} events
+            {tasksWithDueDates.length > 0 && `, ${tasksWithDueDates.length} task due date${tasksWithDueDates.length === 1 ? '' : 's'}`} ·{' '}
+            {range.label}
             {earliestLabel && latestLabel && (
               <span style={{ color: 'var(--text-faint)' }}> · data from {earliestLabel} to {latestLabel}</span>
             )}
@@ -285,29 +311,56 @@ export function CalendarPage() {
       </div>
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <div className="card-title">Events</div>
+        <div className="card-title">Events &amp; task due dates</div>
         {groups.length === 0 ? (
-          <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No events in this range.</p>
+          <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>Nothing in this range.</p>
         ) : (
           <div style={{ maxHeight: 480, overflowY: 'auto' }}>
-            {groups.map(([day, dayEvents]) => (
+            {groups.map(([day, items]) => (
               <div key={day} style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 6 }}>
                   {new Date(day).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
                 </div>
-                {dayEvents.map((e) => (
-                  <div key={e.id} className="row" style={{ padding: '6px 0' }}>
-                    <span className="badge">{e.source}</span>
-                    <span style={{ color: 'var(--text-dim)', fontSize: 13, width: 90 }}>
-                      {e.all_day ? 'All day' : new Date(e.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                    <span style={{ flex: 1 }}>{e.title}</span>
-                    {e.location && <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>{e.location}</span>}
-                    <button className="btn btn-ghost" style={{ padding: '2px 6px' }} onClick={() => deleteEvent(e.id)}>
-                      <X size={13} />
-                    </button>
-                  </div>
-                ))}
+                {items.map((item) =>
+                  item.kind === 'event' ? (
+                    <div key={`event-${item.event.id}`} className="row" style={{ padding: '6px 0' }}>
+                      <span style={{ width: 20 }} />
+                      <span className="badge">{item.event.source}</span>
+                      <span style={{ color: 'var(--text-dim)', fontSize: 13, width: 80 }}>
+                        {item.event.all_day
+                          ? 'All day'
+                          : new Date(item.event.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <span style={{ flex: 1 }}>{item.event.title}</span>
+                      {item.event.location && (
+                        <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>{item.event.location}</span>
+                      )}
+                      <button className="btn btn-ghost" style={{ padding: '2px 6px' }} onClick={() => deleteEvent(item.event.id)}>
+                        <X size={13} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div key={`task-${item.task.id}`} className="row" style={{ padding: '6px 0' }}>
+                      <TaskCheckbox
+                        checked={item.task.completed}
+                        onToggle={(_, origin) => toggleTask(item.task.id, item.task.completed, origin)}
+                      />
+                      <span className="badge badge-ai">Task due</span>
+                      <span style={{ color: 'var(--text-dim)', fontSize: 13, width: 80 }}>
+                        {new Date(item.task.due_date!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <span
+                        style={{
+                          flex: 1,
+                          textDecoration: item.task.completed ? 'line-through' : 'none',
+                          color: item.task.completed ? 'var(--text-dim)' : 'var(--text)',
+                        }}
+                      >
+                        {item.task.title}
+                      </span>
+                    </div>
+                  ),
+                )}
               </div>
             ))}
           </div>

@@ -3,6 +3,7 @@ import { NavShell } from './components/NavShell';
 import { BudgetPage } from './pages/BudgetPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { HabitsPage } from './pages/HabitsPage';
+import { SchedulePage } from './pages/SchedulePage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TodayPage } from './pages/TodayPage';
 
@@ -12,6 +13,7 @@ export default function App() {
       <Routes>
         <Route element={<NavShell />}>
           <Route path="/" element={<TodayPage />} />
+          <Route path="/schedule" element={<SchedulePage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/habits" element={<HabitsPage />} />
           <Route path="/budget" element={<BudgetPage />} />

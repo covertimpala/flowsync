@@ -112,6 +112,14 @@ export interface ScheduleResponse {
   unscheduled: Task[];
 }
 
+export interface DaySchedule extends ScheduleResponse {
+  date: string;
+}
+
+export interface ScheduleRangeResponse {
+  days: DaySchedule[];
+}
+
 export interface DeviceCodeInfo {
   device_code: string;
   user_code: string;

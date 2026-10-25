@@ -1,8 +1,9 @@
-import { CalendarDays, ListTodo, PiggyBank, Settings, Sparkles, Target } from 'lucide-react';
+import { CalendarDays, ListTodo, PiggyBank, Rows3, Settings, Sparkles, Target } from 'lucide-react';
 import { NavLink, Outlet } from 'react-router-dom';
 
 const LINKS = [
   { to: '/', label: 'Today', icon: ListTodo },
+  { to: '/schedule', label: 'Schedule', icon: Rows3 },
   { to: '/calendar', label: 'Calendar', icon: CalendarDays },
   { to: '/habits', label: 'Habits', icon: Target },
   { to: '/budget', label: 'Budget', icon: PiggyBank },

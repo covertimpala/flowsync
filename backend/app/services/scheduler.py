@@ -14,6 +14,17 @@ class TimeSlot:
         return self.end - self.start
 
 
+@dataclass
+class Busy:
+    """A free_slots_for()-compatible stand-in for anything that occupies
+    time but isn't a CalendarEvent — e.g. a task that's already anchored
+    to a slot. Only .start/.end are ever read, so this is cheaper than
+    constructing something heavier for a value that's never persisted."""
+
+    start: datetime
+    end: datetime
+
+
 class SchedulerEngine:
     """Builds the day's schedule by fitting unscheduled tasks into the gaps
     left by calendar events, inside a configurable working window.
@@ -27,7 +38,7 @@ class SchedulerEngine:
         self.day_end_hour = day_end_hour
         self.buffer_minutes = buffer_minutes
 
-    def free_slots_for(self, day: datetime, busy_events: list[CalendarEvent]) -> list[TimeSlot]:
+    def free_slots_for(self, day: datetime, busy_events: list[CalendarEvent | Busy]) -> list[TimeSlot]:
         window_start = day.replace(hour=self.day_start_hour, minute=0, second=0, microsecond=0)
         window_end = day.replace(hour=self.day_end_hour, minute=0, second=0, microsecond=0)
 

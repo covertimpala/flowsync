@@ -1,10 +1,10 @@
 import { Plus, Sparkles } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api/client';
+import { DayTimeline } from '../components/DayTimeline';
 import { PendingSection } from '../components/PendingSection';
-import { TaskCheckbox } from '../components/TaskCheckbox';
 import { celebrateTaskCompletion } from '../lib/celebrate';
-import type { PendingInbox, ScheduleResponse, TaskCategory, TaskPriority } from '../types';
+import type { PendingInbox, ScheduleResponse, TaskCategory } from '../types';
 
 const CATEGORY_PALETTE = ['#6c8dfa', '#45c586', '#e3a648', '#c89bf8', '#68d4f5', '#f0565c', '#f0a868'];
 
@@ -13,6 +13,7 @@ export function TodayPage() {
   const [pending, setPending] = useState<PendingInbox | null>(null);
   const [categories, setCategories] = useState<TaskCategory[]>([]);
   const [newTitle, setNewTitle] = useState('');
+  const [newDueDate, setNewDueDate] = useState('');
   const [newCategoryId, setNewCategoryId] = useState<number | ''>('');
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -52,8 +53,10 @@ export function TodayPage() {
     await api.post('/api/tasks', {
       title: newTitle.trim(),
       category_id: newCategoryId === '' ? null : newCategoryId,
+      due_date: newDueDate ? new Date(newDueDate).toISOString() : null,
     });
     setNewTitle('');
+    setNewDueDate('');
     load();
   }
 
@@ -116,48 +119,27 @@ export function TodayPage() {
 
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-title">Timeline</div>
-        {schedule.events.length === 0 && schedule.planned.length === 0 && (
-          <p style={{ color: 'var(--text-dim)' }}>Nothing scheduled yet.</p>
-        )}
-        {schedule.events.map((e) => (
-          <TimelineRow key={`event-${e.id}`} time={fmtRange(e.start, e.end)} title={e.title} kind="Event" />
-        ))}
-        {schedule.planned.map((p) => (
-          <TimelineRow
-            key={`task-${p.task.id}`}
-            time={fmtRange(p.start, p.end)}
-            title={p.task.title}
-            kind="Task"
-            done={p.task.completed}
-            category={p.task.category_id ? categoryById.get(p.task.category_id) : undefined}
-            onToggle={(origin) => toggleComplete(p.task.id, p.task.completed, origin)}
-          />
-        ))}
+        <DayTimeline
+          schedule={schedule}
+          categoryById={categoryById}
+          onToggleTask={toggleComplete}
+          emptyLabel="Nothing scheduled yet."
+        />
       </div>
 
-      {schedule.unscheduled.length > 0 && (
-        <div className="card" style={{ marginBottom: 20 }}>
-          <div className="card-title">Couldn't fit today</div>
-          {schedule.unscheduled.map((t) => (
-            <TimelineRow
-              key={`unsched-${t.id}`}
-              time={t.completed ? 'Completed' : priorityLabel(t.priority)}
-              title={t.title}
-              kind="Task"
-              done={t.completed}
-              category={t.category_id ? categoryById.get(t.category_id) : undefined}
-              onToggle={(origin) => toggleComplete(t.id, t.completed, origin)}
-            />
-          ))}
-        </div>
-      )}
-
-      <form className="card" onSubmit={addTask} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <form className="card" onSubmit={addTask} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <input
-          style={{ flex: 1 }}
+          style={{ flex: 1, minWidth: 160 }}
           placeholder="Add a task…"
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
+        />
+        <input
+          type="date"
+          value={newDueDate}
+          onChange={(e) => setNewDueDate(e.target.value)}
+          title="Due date (optional)"
+          style={{ colorScheme: 'dark' }}
         />
         <select
           value={newCategoryId}
@@ -196,52 +178,4 @@ export function TodayPage() {
       </form>
     </div>
   );
-}
-
-function TimelineRow({
-  time,
-  title,
-  kind,
-  done,
-  onToggle,
-  category,
-}: {
-  time: string;
-  title: string;
-  kind: string;
-  done?: boolean;
-  onToggle?: (origin: { x: number; y: number }) => void;
-  category?: TaskCategory;
-}) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
-      {onToggle ? (
-        <TaskCheckbox checked={!!done} onToggle={(_, origin) => onToggle(origin)} />
-      ) : (
-        <span style={{ width: 20 }} />
-      )}
-      <span style={{ width: 150, color: 'var(--text-dim)', fontSize: 13 }}>{time}</span>
-      <span style={{ color: 'var(--text-dim)', fontSize: 11, width: 40 }}>{kind}</span>
-      <span style={{ textDecoration: done ? 'line-through' : 'none', color: done ? 'var(--text-dim)' : 'var(--text)', flex: 1 }}>
-        {title}
-      </span>
-      {category && (
-        <span
-          className="badge"
-          style={{ color: category.color, borderColor: category.color + '55', background: category.color + '15' }}
-        >
-          {category.name}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function fmtRange(start: string, end: string) {
-  const f = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return `${f(start)} – ${f(end)}`;
-}
-
-function priorityLabel(p: TaskPriority) {
-  return `${p} priority`;
 }
