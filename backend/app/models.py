@@ -201,6 +201,28 @@ class BudgetEntry(SQLModel, table=True):
 
 
 # ---------------------------------------------------------------------------
+# AI Assistant — free-text commands turned into a reviewable action plan
+# ---------------------------------------------------------------------------
+
+
+class PendingAction(SQLModel, table=True):
+    """One concrete action (create a task, complete a habit, ...) the AI
+    Assistant proposed in response to a free-text command. Several of
+    these share a `plan_id` — the whole group is what the Assistant page
+    shows as one plan, and the user accepts or denies it as a unit (or
+    removes individual actions first). See services/action_executor.py
+    for what each action_type actually does once accepted."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    plan_id: str = Field(index=True)
+    action_type: str
+    description: str
+    payload_json: str
+    status: ItemStatus = ItemStatus.pending
+    created_at: NaiveDatetime
+
+
+# ---------------------------------------------------------------------------
 # OAuth tokens (Google / Outlook) — one row per provider
 # ---------------------------------------------------------------------------
 

@@ -1,3 +1,4 @@
+import { Flame, Gift, Star } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import type { Habit, Reward } from '../types';
@@ -51,78 +52,138 @@ export function HabitsPage() {
     load();
   }
 
+  const unredeemedRewards = rewards.filter((r) => !r.redeemed);
+  const redeemedRewards = rewards.filter((r) => r.redeemed);
+  const bestStreak = habits.reduce((max, h) => Math.max(max, h.best_streak), 0);
+  const activeStreaks = habits.filter((h) => h.current_streak > 0).length;
+
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 20 }}>
-        <h1 style={{ flex: 1 }}>Habits</h1>
-        <span className="badge" style={{ fontSize: 14, padding: '4px 12px' }}>
-          ⭐ {points} pts
-        </span>
-      </div>
+      <h1>Habits</h1>
+      <p className="page-subtitle">Daily check-ins, streaks, and the rewards you've earned</p>
 
-      <div className="card" style={{ marginBottom: 20 }}>
-        {habits.length === 0 && <p style={{ color: 'var(--text-dim)' }}>No habits yet.</p>}
-        {habits.map((h) => (
-          <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0' }}>
-            <span style={{ flex: 1 }}>{h.name}</span>
-            <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>
-              streak {h.current_streak} · best {h.best_streak} · +{h.points_per_completion}pts
-            </span>
-            <button className="btn btn-primary" onClick={() => complete(h.id)}>
-              Done today
-            </button>
+      <div className="grid-3" style={{ marginBottom: 20 }}>
+        <div className="stat-tile">
+          <div className="label">Available points</div>
+          <div className="value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Star size={18} color="var(--warning)" fill="var(--warning)" /> {points}
           </div>
-        ))}
+        </div>
+        <div className="stat-tile">
+          <div className="label">Active streaks</div>
+          <div className="value">{activeStreaks} / {habits.length}</div>
+        </div>
+        <div className="stat-tile">
+          <div className="label">Best streak ever</div>
+          <div className="value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Flame size={18} color="var(--danger)" /> {bestStreak}
+          </div>
+        </div>
       </div>
 
-      <form className="card" onSubmit={addHabit} style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        <input
-          style={{ flex: 1 }}
-          placeholder="e.g. Drink water"
-          value={newHabit}
-          onChange={(e) => setNewHabit(e.target.value)}
-        />
-        <button className="btn btn-primary" type="submit">
-          Add habit
-        </button>
-      </form>
+      <div className="grid-2">
+        <div>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-title">Daily habits</div>
+            {habits.length === 0 && <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No habits yet — add one below.</p>}
+            {habits.map((h) => (
+              <div
+                key={h.id}
+                className="row"
+                style={{
+                  justifyContent: 'space-between',
+                  padding: '12px 14px',
+                  marginBottom: 8,
+                  background: 'var(--panel-2)',
+                  borderRadius: 10,
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 500 }}>{h.name}</div>
+                  <div className="row" style={{ marginTop: 4, gap: 10, color: 'var(--text-dim)', fontSize: 12 }}>
+                    <span className="row" style={{ gap: 3 }}>
+                      <Flame size={12} color={h.current_streak > 0 ? 'var(--danger)' : 'var(--text-faint)'} />
+                      {h.current_streak} day streak
+                    </span>
+                    <span>best {h.best_streak}</span>
+                    <span>+{h.points_per_completion}pts</span>
+                  </div>
+                </div>
+                <button className="btn btn-primary" style={{ whiteSpace: 'nowrap' }} onClick={() => complete(h.id)}>
+                  Done today
+                </button>
+              </div>
+            ))}
+          </div>
 
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div className="card-title">Rewards</div>
-        {rewards.map((r) => (
-          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0' }}>
-            <span style={{ flex: 1 }}>{r.name}</span>
-            <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>{r.point_cost} pts</span>
-            {r.redeemed ? (
-              <span className="badge" style={{ color: 'var(--success)' }}>
-                Redeemed
-              </span>
-            ) : (
-              <button className="btn" onClick={() => redeem(r.id)}>
-                Redeem
-              </button>
+          <form className="card" onSubmit={addHabit} style={{ display: 'flex', gap: 8 }}>
+            <input
+              style={{ flex: 1 }}
+              placeholder="e.g. Drink water"
+              value={newHabit}
+              onChange={(e) => setNewHabit(e.target.value)}
+            />
+            <button className="btn btn-primary" type="submit">
+              Add habit
+            </button>
+          </form>
+        </div>
+
+        <div>
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div className="card-title">Rewards</div>
+            {rewards.length === 0 && <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No rewards set up yet.</p>}
+            {unredeemedRewards.map((r) => (
+              <div
+                key={r.id}
+                className="row"
+                style={{ justifyContent: 'space-between', padding: '10px 14px', marginBottom: 6, background: 'var(--panel-2)', borderRadius: 10 }}
+              >
+                <span className="row" style={{ gap: 8 }}>
+                  <Gift size={15} color="var(--text-dim)" /> {r.name}
+                </span>
+                <span className="row">
+                  <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>{r.point_cost} pts</span>
+                  <button className="btn" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => redeem(r.id)}>
+                    Redeem
+                  </button>
+                </span>
+              </div>
+            ))}
+            {redeemedRewards.length > 0 && (
+              <>
+                <div style={{ fontSize: 11, color: 'var(--text-faint)', margin: '10px 0 6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  Redeemed
+                </div>
+                {redeemedRewards.map((r) => (
+                  <div key={r.id} className="row" style={{ justifyContent: 'space-between', padding: '6px 14px', opacity: 0.6 }}>
+                    <span>{r.name}</span>
+                    <span className="badge badge-success">Redeemed</span>
+                  </div>
+                ))}
+              </>
             )}
           </div>
-        ))}
-      </div>
 
-      <form className="card" onSubmit={addReward} style={{ display: 'flex', gap: 8 }}>
-        <input
-          style={{ flex: 1 }}
-          placeholder="e.g. Takeout night"
-          value={newReward}
-          onChange={(e) => setNewReward(e.target.value)}
-        />
-        <input
-          type="number"
-          style={{ width: 90 }}
-          value={newRewardCost}
-          onChange={(e) => setNewRewardCost(Number(e.target.value))}
-        />
-        <button className="btn btn-primary" type="submit">
-          Add reward
-        </button>
-      </form>
+          <form className="card" onSubmit={addReward} style={{ display: 'flex', gap: 8 }}>
+            <input
+              style={{ flex: 1 }}
+              placeholder="e.g. Takeout night"
+              value={newReward}
+              onChange={(e) => setNewReward(e.target.value)}
+            />
+            <input
+              type="number"
+              style={{ width: 90 }}
+              value={newRewardCost}
+              onChange={(e) => setNewRewardCost(Number(e.target.value))}
+            />
+            <button className="btn btn-primary" type="submit">
+              Add
+            </button>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }

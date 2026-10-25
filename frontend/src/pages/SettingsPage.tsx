@@ -43,54 +43,57 @@ export function SettingsPage() {
       <h1>Settings</h1>
       <p className="page-subtitle">API access, and the local AI model used for suggestions</p>
 
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div className="card-title">API access for other applications</div>
-        <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>
-          Any application can read/write FlowSync data by sending this key as an{' '}
-          <code>X-API-Key</code> header. Items it creates land in the Pending inbox on the Today
-          page — include an <code>X-Client-Name</code> header so you know where they came from.
-          Nothing it submits becomes real until you accept it there.
-        </p>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <code
-            style={{
-              flex: 1,
-              padding: '8px 10px',
-              background: 'var(--panel-2)',
-              borderRadius: 6,
-              overflowWrap: 'break-word',
-            }}
-          >
-            {apiKey}
-          </code>
-          <button className="btn btn-danger" onClick={regenerate}>
-            Regenerate
-          </button>
+      <div className="grid-2">
+        <div className="card">
+          <div className="card-title">API access for other applications</div>
+          <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>
+            Any application can read/write FlowSync data by sending this key as an{' '}
+            <code>X-API-Key</code> header. Items it creates land in the Pending inbox on the Today
+            page — include an <code>X-Client-Name</code> header so you know where they came from.
+            Nothing it submits becomes real until you accept it there.
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <code
+              style={{
+                flex: 1,
+                padding: '8px 10px',
+                background: 'var(--panel-2)',
+                borderRadius: 6,
+                overflowWrap: 'break-word',
+                fontSize: 12,
+              }}
+            >
+              {apiKey}
+            </code>
+            <button className="btn btn-danger" onClick={regenerate}>
+              Regenerate
+            </button>
+          </div>
         </div>
-      </div>
 
-      <form className="card" onSubmit={saveOllama} style={{ marginBottom: 20 }}>
-        <div className="card-title">AI suggestions (Ollama)</div>
-        <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>
-          Status:{' '}
-          {ollamaStatus?.available ? (
-            <span style={{ color: 'var(--success)' }}>reachable</span>
-          ) : (
-            <span style={{ color: 'var(--danger)' }}>not reachable</span>
-          )}
-        </p>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <label style={{ width: 80 }}>Host</label>
-          <input style={{ flex: 1 }} value={host} onChange={(e) => setHost(e.target.value)} />
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <label style={{ width: 80 }}>Model</label>
-          <input style={{ flex: 1 }} value={model} onChange={(e) => setModel(e.target.value)} />
-        </div>
-        <button className="btn btn-primary" type="submit">
-          {saved ? 'Saved' : 'Save'}
-        </button>
-      </form>
+        <form className="card" onSubmit={saveOllama}>
+          <div className="card-title">AI suggestions (Ollama)</div>
+          <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>
+            Status:{' '}
+            {ollamaStatus?.available ? (
+              <span style={{ color: 'var(--success)' }}>reachable</span>
+            ) : (
+              <span style={{ color: 'var(--danger)' }}>not reachable</span>
+            )}
+          </p>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <label style={{ width: 80 }}>Host</label>
+            <input style={{ flex: 1 }} value={host} onChange={(e) => setHost(e.target.value)} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <label style={{ width: 80 }}>Model</label>
+            <input style={{ flex: 1 }} value={model} onChange={(e) => setModel(e.target.value)} />
+          </div>
+          <button className="btn btn-primary" type="submit">
+            {saved ? 'Saved' : 'Save'}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

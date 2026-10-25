@@ -124,6 +124,15 @@ export interface ScheduleRangeResponse {
   days: DaySchedule[];
 }
 
+export interface ProposedAction {
+  id: number;
+  plan_id: string;
+  action_type: string;
+  description: string;
+  payload_json: string;
+  status: string;
+}
+
 export interface DeviceCodeInfo {
   device_code: string;
   user_code: string;

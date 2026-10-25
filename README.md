@@ -39,6 +39,23 @@ origins for every task/event/habit:
 - **api** — created by an external application that sent its own
   `X-Client-Name` header. Lands as **pending**.
 
+### AI Assistant
+
+Beyond the suggestion engine, the **Assistant** page takes a free-text
+instruction ("mark my grocery run as done and log a $40 expense") and
+turns it into a reviewable plan — a list of concrete actions
+(`POST /api/ai/command`) that sits untouched until you click **Accept**
+(or **Deny**, or remove individual actions first). The model never
+writes directly to the database; `PendingAction` rows are the only thing
+it can create, and `services/action_executor.py` is the only thing that
+turns an accepted one into a real change.
+
+Local models with a "thinking" mode (Qwen3 and similar) are called with
+`think: false` for this and the suggestion engine — both want structured
+JSON back, not visible chain-of-thought, and leaving thinking on risks
+the model spending its whole token budget on hidden reasoning and
+returning nothing at all for a multi-part instruction.
+
 Pending items show up in the **Pending** inbox at the top of the Today
 page with Accept/Deny buttons — nothing an AI or another app proposes
 becomes real until a person approves it. Accepting a pending calendar

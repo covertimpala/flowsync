@@ -24,8 +24,16 @@ class OllamaClient:
         except httpx.HTTPError:
             return False
 
-    async def generate(self, prompt: str, system: str | None = None) -> str:
-        body = {"model": self.model, "prompt": prompt, "stream": False}
+    async def generate(self, prompt: str, system: str | None = None, think: bool = False) -> str:
+        # think=False: every caller here wants pure structured JSON back,
+        # not visible chain-of-thought — and for a hybrid reasoning model
+        # (Qwen3 and similar), leaving thinking on is actively harmful for
+        # this use case: Ollama caps total output tokens per request, the
+        # model can burn the whole budget on hidden reasoning for a
+        # multi-part instruction, and `response` comes back empty
+        # (`done_reason: "length"`) with nothing to parse. Models that
+        # don't support the "think" field just ignore it.
+        body = {"model": self.model, "prompt": prompt, "stream": False, "think": think}
         if system:
             body["system"] = system
 

@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { NavShell } from './components/NavShell';
+import { AssistantPage } from './pages/AssistantPage';
 import { BudgetPage } from './pages/BudgetPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { HabitsPage } from './pages/HabitsPage';
@@ -17,6 +18,7 @@ export default function App() {
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/habits" element={<HabitsPage />} />
           <Route path="/budget" element={<BudgetPage />} />
+          <Route path="/assistant" element={<AssistantPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>

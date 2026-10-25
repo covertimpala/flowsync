@@ -36,7 +36,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const body = await res.text();
-    throw new ApiError(res.status, body || res.statusText);
+    // FastAPI error responses are {"detail": "..."} — show that message
+    // directly instead of the raw JSON blob when it parses that way.
+    let message = body || res.statusText;
+    try {
+      const parsed = JSON.parse(body);
+      if (typeof parsed?.detail === 'string') message = parsed.detail;
+    } catch {
+      // not JSON — use the raw body as-is
+    }
+    throw new ApiError(res.status, message);
   }
   if (res.status === 204) return undefined as T;
   return res.json();

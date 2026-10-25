@@ -1,4 +1,4 @@
-import { CalendarDays, ListTodo, PiggyBank, Rows3, Settings, Sparkles, Target } from 'lucide-react';
+import { CalendarDays, ListTodo, PiggyBank, Rows3, Settings, Sparkles, Target, Wand2 } from 'lucide-react';
 import { NavLink, Outlet } from 'react-router-dom';
 
 const LINKS = [
@@ -7,6 +7,7 @@ const LINKS = [
   { to: '/calendar', label: 'Calendar', icon: CalendarDays },
   { to: '/habits', label: 'Habits', icon: Target },
   { to: '/budget', label: 'Budget', icon: PiggyBank },
+  { to: '/assistant', label: 'Assistant', icon: Wand2 },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -66,7 +67,7 @@ export function NavShell() {
           </NavLink>
         ))}
       </nav>
-      <main style={{ flex: 1, padding: '32px 36px', maxWidth: 1040 }}>
+      <main style={{ flex: 1, padding: '32px 40px', maxWidth: 1320 }}>
         <Outlet />
       </main>
     </div>

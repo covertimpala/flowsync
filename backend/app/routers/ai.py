@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -11,12 +12,14 @@ from ..models import (
     CalendarEvent,
     Habit,
     ItemStatus,
+    PendingAction,
     RescheduleSuggestion,
     Task,
 )
 from ..schemas import OllamaSettingsUpdate
 from ..security import require_api_key
-from ..services import settings_store
+from ..services import ai_command, settings_store
+from ..services.action_executor import ActionError, execute as execute_action
 from ..services.ollama_client import OllamaClient, OllamaException
 from ..services.reschedule_engine import describe_opening, find_opening
 from ..services.suggestion_engine import SuggestionEngine
@@ -131,3 +134,71 @@ def check_overdue(session: Session = Depends(get_session)) -> dict:
         created.append(suggestion)
 
     return {"created": len(created)}
+
+
+class CommandRequest(BaseModel):
+    text: str
+
+
+@router.post("/command")
+async def submit_command(body: CommandRequest, session: Session = Depends(get_session)) -> dict:
+    """The AI Assistant: turns a free-text instruction into a reviewable
+    plan of actions (PendingAction rows). Nothing executes yet — see
+    POST .../command/{plan_id}/accept."""
+    client = _ollama_client(session)
+    if not await client.is_available():
+        raise HTTPException(503, f"Can't reach Ollama at {client.host} — is `ollama serve` running?")
+
+    try:
+        actions = await ai_command.build_plan(session, client, body.text)
+    except ai_command.CommandError as e:
+        raise HTTPException(422, str(e))
+
+    plan_id = actions[0].plan_id if actions else None
+    return {"plan_id": plan_id, "actions": actions}
+
+
+@router.get("/command/{plan_id}")
+def get_plan(plan_id: str, session: Session = Depends(get_session)) -> dict:
+    actions = session.exec(select(PendingAction).where(PendingAction.plan_id == plan_id)).all()
+    return {"plan_id": plan_id, "actions": actions}
+
+
+@router.delete("/command/action/{action_id}")
+def remove_action(action_id: int, session: Session = Depends(get_session)) -> dict:
+    """Drops one action from a plan before it's accepted — lets the user
+    trim a plan down instead of accepting or denying it all-or-nothing."""
+    action = session.get(PendingAction, action_id)
+    if action and action.status == ItemStatus.pending:
+        session.delete(action)
+        session.commit()
+    return {"ok": True}
+
+
+@router.post("/command/{plan_id}/accept")
+def accept_plan(plan_id: str, session: Session = Depends(get_session)) -> dict:
+    actions = session.exec(
+        select(PendingAction).where(PendingAction.plan_id == plan_id, PendingAction.status == ItemStatus.pending)
+    ).all()
+    if not actions:
+        raise HTTPException(404, "Plan not found or already resolved")
+
+    results = []
+    for action in actions:
+        try:
+            result = execute_action(session, action)
+            results.append({"action_id": action.id, "ok": True, "result": result})
+        except ActionError as e:
+            results.append({"action_id": action.id, "ok": False, "error": str(e)})
+    return {"results": results}
+
+
+@router.post("/command/{plan_id}/deny")
+def deny_plan(plan_id: str, session: Session = Depends(get_session)) -> dict:
+    actions = session.exec(
+        select(PendingAction).where(PendingAction.plan_id == plan_id, PendingAction.status == ItemStatus.pending)
+    ).all()
+    for action in actions:
+        session.delete(action)
+    session.commit()
+    return {"ok": True}
