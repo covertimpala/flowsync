@@ -26,6 +26,18 @@ def list_events(
     return session.exec(query.order_by(CalendarEvent.start)).all()
 
 
+@router.get("/bounds")
+def bounds(session: Session = Depends(get_session)) -> dict:
+    """The earliest and latest confirmed event start times, so the
+    frontend can offer an accurate "All time" range."""
+    rows = session.exec(
+        select(CalendarEvent.start).where(CalendarEvent.status == ItemStatus.confirmed)
+    ).all()
+    if not rows:
+        return {"earliest": None, "latest": None}
+    return {"earliest": min(rows).isoformat(), "latest": max(rows).isoformat()}
+
+
 @router.post("", response_model=CalendarEvent)
 def create_event(
     body: EventCreate,

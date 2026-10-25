@@ -1,15 +1,30 @@
-import { useEffect, useState } from 'react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../api/client';
 import type { CalendarEvent, DeviceCodeInfo } from '../types';
 
-function startOfToday() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+function startOfDay(d: Date) {
+  const r = new Date(d);
+  r.setHours(0, 0, 0, 0);
+  return r;
 }
+
+type Timescale = 'week' | 'month' | '3m' | 'all' | 'custom';
+
+const TIMESCALE_OPTIONS: { value: Timescale; label: string }[] = [
+  { value: 'week', label: 'Week' },
+  { value: 'month', label: 'Month' },
+  { value: '3m', label: '3 months' },
+  { value: 'all', label: 'All time' },
+  { value: 'custom', label: 'Custom' },
+];
 
 export function CalendarPage() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [bounds, setBounds] = useState<{ earliest: string | null; latest: string | null }>({
+    earliest: null,
+    latest: null,
+  });
   const [newTitle, setNewTitle] = useState('');
   const [icsText, setIcsText] = useState('');
   const [showIcsBox, setShowIcsBox] = useState(false);
@@ -19,23 +34,75 @@ export function CalendarPage() {
   const [deviceCode, setDeviceCode] = useState<DeviceCodeInfo | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
+  const [timescale, setTimescaleRaw] = useState<Timescale>('week');
+  const [offset, setOffset] = useState(0);
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+
+  function setTimescale(t: Timescale) {
+    setTimescaleRaw(t);
+    setOffset(0);
+  }
+
+  const range = useMemo(() => {
+    const today = startOfDay(new Date());
+
+    if (timescale === 'all') {
+      const start = bounds.earliest ? startOfDay(new Date(bounds.earliest)) : today;
+      const end = bounds.latest
+        ? new Date(startOfDay(new Date(bounds.latest)).getTime() + 24 * 60 * 60 * 1000)
+        : new Date(today.getTime() + 24 * 60 * 60 * 1000);
+      return { start, end, label: 'All time', canNavigate: false };
+    }
+
+    if (timescale === 'custom') {
+      const start = customStart ? new Date(customStart) : today;
+      const end = customEnd ? new Date(new Date(customEnd).getTime() + 24 * 60 * 60 * 1000) : new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+      return { start, end, label: 'Custom range', canNavigate: false };
+    }
+
+    if (timescale === 'month') {
+      const base = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+      const start = base;
+      const end = new Date(base.getFullYear(), base.getMonth() + 1, 1);
+      return { start, end, label: base.toLocaleString([], { month: 'long', year: 'numeric' }), canNavigate: true };
+    }
+
+    if (timescale === '3m') {
+      const start = new Date(today.getFullYear(), today.getMonth() + offset * 3, 1);
+      const end = new Date(start.getFullYear(), start.getMonth() + 3, 1);
+      const label = `${start.toLocaleString([], { month: 'short' })} – ${new Date(end.getTime() - 1).toLocaleString([], { month: 'short', year: 'numeric' })}`;
+      return { start, end, label, canNavigate: true };
+    }
+
+    // week
+    const start = new Date(today.getTime() + offset * 7 * 24 * 60 * 60 * 1000);
+    const end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const label =
+      offset === 0
+        ? 'This week'
+        : `${start.toLocaleDateString([], { month: 'short', day: 'numeric' })} – ${new Date(end.getTime() - 1).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+    return { start, end, label, canNavigate: true };
+  }, [timescale, offset, customStart, customEnd, bounds]);
+
   async function load() {
-    const start = startOfToday();
-    const end = new Date(start.getTime() + 14 * 24 * 60 * 60 * 1000);
-    const qs = `start=${start.toISOString()}&end=${end.toISOString()}`;
-    const [ev, g, o] = await Promise.all([
+    const qs = `start=${range.start.toISOString()}&end=${range.end.toISOString()}`;
+    const [ev, g, o, b] = await Promise.all([
       api.get<CalendarEvent[]>(`/api/events?${qs}`),
       api.get(`/api/calendar/google/status`),
       api.get(`/api/calendar/outlook/status`),
+      api.get<{ earliest: string | null; latest: string | null }>('/api/events/bounds'),
     ]);
     setEvents(ev);
     setGoogleStatus(g as any);
     setOutlookStatus(o as any);
+    setBounds(b);
   }
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.start.getTime(), range.end.getTime()]);
 
   async function addEvent(e: React.FormEvent) {
     e.preventDefault();
@@ -50,6 +117,11 @@ export function CalendarPage() {
       end: end.toISOString(),
     });
     setNewTitle('');
+    load();
+  }
+
+  async function deleteEvent(id: number) {
+    await api.delete(`/api/events/${id}`);
     load();
   }
 
@@ -93,12 +165,75 @@ export function CalendarPage() {
     load();
   }
 
+  const groups = useMemo(() => {
+    const byDay = new Map<string, CalendarEvent[]>();
+    for (const e of events) {
+      const key = new Date(e.start).toDateString();
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key)!.push(e);
+    }
+    return Array.from(byDay.entries());
+  }, [events]);
+
+  const earliestLabel = bounds.earliest ? new Date(bounds.earliest).toLocaleDateString() : null;
+  const latestLabel = bounds.latest ? new Date(bounds.latest).toLocaleDateString() : null;
+
   return (
     <div>
-      <h1>Calendar</h1>
-      <p className="page-subtitle">Local events, plus anything synced from Google or Outlook</p>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4, flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h1>Calendar</h1>
+          <p className="page-subtitle" style={{ marginBottom: 0 }}>
+            {events.length} events · {range.label}
+            {earliestLabel && latestLabel && (
+              <span style={{ color: 'var(--text-faint)' }}> · data from {earliestLabel} to {latestLabel}</span>
+            )}
+          </p>
+        </div>
+        <div className="row">
+          {range.canNavigate && (
+            <div className="row" style={{ gap: 2 }}>
+              <button className="btn btn-ghost" onClick={() => setOffset((o) => o - 1)} aria-label="Previous">
+                <ChevronLeft size={16} />
+              </button>
+              <button className="btn btn-ghost" onClick={() => setOffset(0)} disabled={offset === 0}>
+                Today
+              </button>
+              <button className="btn btn-ghost" onClick={() => setOffset((o) => o + 1)} aria-label="Next">
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
+          <div className="row" style={{ background: 'var(--panel-2)', padding: 4, borderRadius: 10, border: '1px solid var(--border-soft)' }}>
+            {TIMESCALE_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                className="btn btn-ghost"
+                style={{
+                  padding: '6px 12px',
+                  fontSize: 13,
+                  background: timescale === opt.value ? 'var(--accent)' : 'transparent',
+                  color: timescale === opt.value ? 'white' : 'var(--text-dim)',
+                  fontWeight: timescale === opt.value ? 600 : 500,
+                }}
+                onClick={() => setTimescale(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
-      <div className="card" style={{ marginBottom: 20 }}>
+      {timescale === 'custom' && (
+        <div className="row" style={{ marginTop: 16, marginBottom: 4 }}>
+          <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
+          <span style={{ color: 'var(--text-dim)' }}>to</span>
+          <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
+        </div>
+      )}
+
+      <div className="card" style={{ marginTop: 20, marginBottom: 20 }}>
         <div className="card-title">Connect a calendar</div>
         <ProviderRow
           name="Google Calendar"
@@ -150,17 +285,33 @@ export function CalendarPage() {
       </div>
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <div className="card-title">Next 14 days</div>
-        {events.length === 0 && <p style={{ color: 'var(--text-dim)' }}>No events.</p>}
-        {events.map((e) => (
-          <div key={e.id} style={{ display: 'flex', gap: 10, padding: '6px 0', alignItems: 'center' }}>
-            <span className="badge">{e.source}</span>
-            <span style={{ color: 'var(--text-dim)', fontSize: 13, width: 160 }}>
-              {new Date(e.start).toLocaleString()}
-            </span>
-            <span>{e.title}</span>
+        <div className="card-title">Events</div>
+        {groups.length === 0 ? (
+          <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No events in this range.</p>
+        ) : (
+          <div style={{ maxHeight: 480, overflowY: 'auto' }}>
+            {groups.map(([day, dayEvents]) => (
+              <div key={day} style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 6 }}>
+                  {new Date(day).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                </div>
+                {dayEvents.map((e) => (
+                  <div key={e.id} className="row" style={{ padding: '6px 0' }}>
+                    <span className="badge">{e.source}</span>
+                    <span style={{ color: 'var(--text-dim)', fontSize: 13, width: 90 }}>
+                      {e.all_day ? 'All day' : new Date(e.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                    <span style={{ flex: 1 }}>{e.title}</span>
+                    {e.location && <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>{e.location}</span>}
+                    <button className="btn btn-ghost" style={{ padding: '2px 6px' }} onClick={() => deleteEvent(e.id)}>
+                      <X size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
 
       <form className="card" onSubmit={addEvent} style={{ display: 'flex', gap: 8 }}>
@@ -197,9 +348,7 @@ function ProviderRow({
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0' }}>
       <span style={{ width: 200 }}>{name}</span>
       {status?.connected ? (
-        <span className="badge" style={{ color: 'var(--success)' }}>
-          Connected
-        </span>
+        <span className="badge badge-success">Connected</span>
       ) : status?.has_client_id ? (
         <button className="btn" onClick={onConnect} disabled={busy}>
           {busy ? 'Connecting…' : 'Connect'}
