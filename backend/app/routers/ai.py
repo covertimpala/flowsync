@@ -4,11 +4,21 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import BudgetCategory, BudgetEntry, BudgetEntryType, CalendarEvent, Habit, ItemStatus, Task
+from ..models import (
+    BudgetCategory,
+    BudgetEntry,
+    BudgetEntryType,
+    CalendarEvent,
+    Habit,
+    ItemStatus,
+    RescheduleSuggestion,
+    Task,
+)
 from ..schemas import OllamaSettingsUpdate
 from ..security import require_api_key
 from ..services import settings_store
 from ..services.ollama_client import OllamaClient, OllamaException
+from ..services.reschedule_engine import describe_opening, find_opening
 from ..services.suggestion_engine import SuggestionEngine
 
 router = APIRouter(prefix="/api/ai", tags=["ai"], dependencies=[Depends(require_api_key)])
@@ -69,3 +79,55 @@ async def suggest(session: Session = Depends(get_session)) -> dict:
     except OllamaException as e:
         raise HTTPException(502, str(e))
     return {"suggestions": created}
+
+
+@router.post("/check-overdue")
+def check_overdue(session: Session = Depends(get_session)) -> dict:
+    """Pure scheduling heuristic, no Ollama needed — runs automatically
+    whenever the Today page loads. For every overdue, not-yet-flagged task,
+    finds the least-busy upcoming opening it would fit in and files a
+    RescheduleSuggestion for the Pending inbox."""
+    now = datetime.now()
+    overdue = session.exec(
+        select(Task).where(
+            Task.status == ItemStatus.confirmed,
+            Task.completed == False,  # noqa: E712
+            Task.due_date != None,  # noqa: E711
+            Task.due_date < now,
+        )
+    ).all()
+
+    created = []
+    for task in overdue:
+        # Already has a plan for a time that hasn't happened yet — being
+        # overdue by due_date doesn't mean it needs another suggestion if
+        # accepting the last one already gave it a future slot.
+        if task.scheduled_start and task.scheduled_start >= now:
+            continue
+
+        already_flagged = session.exec(
+            select(RescheduleSuggestion).where(
+                RescheduleSuggestion.task_id == task.id,
+                RescheduleSuggestion.status == ItemStatus.pending,
+            )
+        ).first()
+        if already_flagged:
+            continue
+
+        opening = find_opening(session, task)
+        if opening is None:
+            continue
+
+        suggestion = RescheduleSuggestion(
+            task_id=task.id,
+            suggested_start=opening.slot.start,
+            suggested_end=opening.slot.end,
+            reason=describe_opening(task, opening),
+            created_at=now,
+        )
+        session.add(suggestion)
+        session.commit()
+        session.refresh(suggestion)
+        created.append(suggestion)
+
+    return {"created": len(created)}

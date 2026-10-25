@@ -1,14 +1,38 @@
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import ItemStatus, Task, TaskOrigin
-from ..schemas import TaskCreate, TaskUpdate
+from ..models import ItemStatus, Task, TaskCategory, TaskOrigin
+from ..schemas import TaskCategoryCreate, TaskCreate, TaskUpdate
 from ..security import require_api_key
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"], dependencies=[Depends(require_api_key)])
+
+
+@router.get("/categories", response_model=list[TaskCategory])
+def list_categories(session: Session = Depends(get_session)):
+    return session.exec(select(TaskCategory).order_by(TaskCategory.name)).all()
+
+
+@router.post("/categories", response_model=TaskCategory)
+def create_category(body: TaskCategoryCreate, session: Session = Depends(get_session)):
+    category = TaskCategory(**body.model_dump())
+    session.add(category)
+    session.commit()
+    session.refresh(category)
+    return category
+
+
+@router.delete("/categories/{category_id}")
+def delete_category(category_id: int, session: Session = Depends(get_session)):
+    category = session.get(TaskCategory, category_id)
+    if category:
+        session.delete(category)
+        session.commit()
+    return {"ok": True}
 
 
 @router.get("", response_model=list[Task])
@@ -47,7 +71,10 @@ def update_task(task_id: int, body: TaskUpdate, session: Session = Depends(get_s
     task = session.get(Task, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    for key, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    if "completed" in updates:
+        updates["completed_at"] = datetime.now() if updates["completed"] else None
+    for key, value in updates.items():
         setattr(task, key, value)
     session.add(task)
     session.commit()

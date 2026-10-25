@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import CalendarEvent, Habit, ItemStatus, Task
+from ..models import CalendarEvent, Habit, ItemStatus, RescheduleSuggestion, Task
 from ..schemas import AcceptRequest
 from ..security import require_api_key
 from ..services import google_calendar, outlook_calendar, settings_store
@@ -18,11 +18,76 @@ def list_pending(session: Session = Depends(get_session)) -> dict:
     """Everything created by the AI suggestion engine or an external
     application, still awaiting a person's accept/deny. This is the single
     inbox the frontend's "Pending" panel renders."""
+    reschedules = session.exec(
+        select(RescheduleSuggestion)
+        .where(RescheduleSuggestion.status == ItemStatus.pending)
+        .order_by(RescheduleSuggestion.id)
+    ).all()
+
+    # Self-healing de-dupe: two near-simultaneous /ai/check-overdue calls
+    # (e.g. React StrictMode double-invoking an effect in dev) can each
+    # pass the "does one already exist" check before either commits,
+    # producing two suggestions for the same task. Keep only the latest.
+    latest_by_task: dict[int, RescheduleSuggestion] = {}
+    for r in reschedules:
+        stale = latest_by_task.get(r.task_id)
+        if stale is not None:
+            session.delete(stale)
+        latest_by_task[r.task_id] = r
+    if len(latest_by_task) != len(reschedules):
+        session.commit()
+    reschedules = list(latest_by_task.values())
+
+    reschedule_payload = []
+    for r in reschedules:
+        task = session.get(Task, r.task_id)
+        if task is None:  # task was deleted after the suggestion was made
+            session.delete(r)
+            session.commit()
+            continue
+        reschedule_payload.append({
+            "id": r.id,
+            "task_id": r.task_id,
+            "task_title": task.title,
+            "suggested_start": r.suggested_start,
+            "suggested_end": r.suggested_end,
+            "reason": r.reason,
+        })
+
     return {
         "tasks": session.exec(select(Task).where(Task.status == ItemStatus.pending)).all(),
         "events": session.exec(select(CalendarEvent).where(CalendarEvent.status == ItemStatus.pending)).all(),
         "habits": session.exec(select(Habit).where(Habit.status == ItemStatus.pending)).all(),
+        "reschedules": reschedule_payload,
     }
+
+
+@router.post("/reschedule/{suggestion_id}/accept")
+def accept_reschedule(suggestion_id: int, session: Session = Depends(get_session)) -> dict:
+    suggestion = session.get(RescheduleSuggestion, suggestion_id)
+    if not suggestion or suggestion.status != ItemStatus.pending:
+        raise HTTPException(404, "Pending reschedule not found")
+    task = session.get(Task, suggestion.task_id)
+    if not task:
+        raise HTTPException(404, "The task this reschedule was for no longer exists")
+
+    task.scheduled_start = suggestion.suggested_start
+    task.scheduled_end = suggestion.suggested_end
+    session.add(task)
+    session.delete(suggestion)
+    session.commit()
+    session.refresh(task)
+    return {"task": task}
+
+
+@router.post("/reschedule/{suggestion_id}/deny")
+def deny_reschedule(suggestion_id: int, session: Session = Depends(get_session)) -> dict:
+    suggestion = session.get(RescheduleSuggestion, suggestion_id)
+    if not suggestion or suggestion.status != ItemStatus.pending:
+        raise HTTPException(404, "Pending reschedule not found")
+    session.delete(suggestion)
+    session.commit()
+    return {"ok": True}
 
 
 @router.post("/{kind}/{item_id}/accept")

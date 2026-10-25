@@ -18,6 +18,7 @@ class TaskCreate(BaseModel):
     due_date: Optional[datetime] = None
     estimated_minutes: int = 30
     priority: TaskPriority = TaskPriority.medium
+    category_id: Optional[int] = None
 
 
 class TaskUpdate(BaseModel):
@@ -29,6 +30,12 @@ class TaskUpdate(BaseModel):
     completed: Optional[bool] = None
     scheduled_start: Optional[datetime] = None
     scheduled_end: Optional[datetime] = None
+    category_id: Optional[int] = None
+
+
+class TaskCategoryCreate(BaseModel):
+    name: str
+    color: str = "#6c8dfa"
 
 
 class EventCreate(BaseModel):

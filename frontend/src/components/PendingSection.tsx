@@ -20,7 +20,7 @@ export function PendingSection({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
 
-  const total = pending.tasks.length + pending.events.length + pending.habits.length;
+  const total = pending.tasks.length + pending.events.length + pending.habits.length + pending.reschedules.length;
   if (total === 0) return null;
 
   async function accept(kind: 'task' | 'event' | 'habit', id: number, pushToCalendar = false) {
@@ -40,6 +40,16 @@ export function PendingSection({
     setBusy(`${kind}-${id}`);
     try {
       await api.post(`/api/pending/${kind}/${id}/deny`);
+      onChanged();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function resolveReschedule(id: number, action: 'accept' | 'deny') {
+    setBusy(`reschedule-${id}`);
+    try {
+      await api.post(`/api/pending/reschedule/${id}/${action}`);
       onChanged();
     } finally {
       setBusy(null);
@@ -82,6 +92,19 @@ export function PendingSection({
             <Actions
               onAccept={() => accept('habit', h.id)}
               onDeny={() => deny('habit', h.id)}
+            />
+          </Row>
+        ))}
+        {pending.reschedules.map((r) => (
+          <Row key={`reschedule-${r.id}`} busy={busy === `reschedule-${r.id}`}>
+            <span className="badge badge-ai">Overdue</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span>{r.task_title}</span>
+              <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>{r.reason}</span>
+            </div>
+            <Actions
+              onAccept={() => resolveReschedule(r.id, 'accept')}
+              onDeny={() => resolveReschedule(r.id, 'deny')}
             />
           </Row>
         ))}

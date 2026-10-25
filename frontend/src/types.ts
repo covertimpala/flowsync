@@ -15,9 +15,25 @@ export interface Task {
   completed: boolean;
   scheduled_start: string | null;
   scheduled_end: string | null;
+  category_id: number | null;
   origin: TaskOrigin;
   status: ItemStatus;
   created_by: string | null;
+}
+
+export interface TaskCategory {
+  id: number;
+  name: string;
+  color: string;
+}
+
+export interface RescheduleSuggestion {
+  id: number;
+  task_id: number;
+  task_title: string;
+  suggested_start: string;
+  suggested_end: string;
+  reason: string;
 }
 
 export interface CalendarEvent {
@@ -87,6 +103,7 @@ export interface PendingInbox {
   tasks: Task[];
   events: CalendarEvent[];
   habits: Habit[];
+  reschedules: RescheduleSuggestion[];
 }
 
 export interface ScheduleResponse {

@@ -72,6 +72,13 @@ class CalendarEvent(SQLModel, table=True):
 # ---------------------------------------------------------------------------
 
 
+class TaskCategory(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    # Hex color for the category's badge/chip in the UI, e.g. "#6c8dfa".
+    color: str = "#6c8dfa"
+
+
 class Task(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     title: str
@@ -80,12 +87,35 @@ class Task(SQLModel, table=True):
     estimated_minutes: int = 30
     priority: TaskPriority = TaskPriority.medium
     completed: bool = False
+    completed_at: Optional[NaiveDatetime] = None
     scheduled_start: Optional[NaiveDatetime] = None
     scheduled_end: Optional[NaiveDatetime] = None
+    category_id: Optional[int] = Field(default=None, foreign_key="taskcategory.id")
 
     origin: TaskOrigin = TaskOrigin.local
     status: ItemStatus = ItemStatus.confirmed
     created_by: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# AI-proposed reschedules for overdue tasks
+# ---------------------------------------------------------------------------
+
+
+class RescheduleSuggestion(SQLModel, table=True):
+    """A proposal to move `task_id` into a free slot on `suggested_start`–
+    `suggested_end`, generated when the task is found overdue (see
+    services/reschedule_engine.py). Lives in the Pending inbox like
+    AI-created tasks/events/habits, but accepting it updates the existing
+    task instead of creating a new row."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    task_id: int = Field(foreign_key="task.id")
+    suggested_start: NaiveDatetime
+    suggested_end: NaiveDatetime
+    reason: str
+    status: ItemStatus = ItemStatus.pending
+    created_at: NaiveDatetime
 
 
 # ---------------------------------------------------------------------------
