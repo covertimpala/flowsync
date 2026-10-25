@@ -1,5 +1,5 @@
 import { FileSpreadsheet, Upload } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -15,13 +15,28 @@ import {
 } from 'recharts';
 import { ApiError, currentApiKey } from '../api/client';
 import { api } from '../api/client';
-import type { BudgetCategory, BudgetSummary } from '../types';
+import type { BudgetCategory, BudgetEntry, BudgetSummary } from '../types';
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 const MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
 const CHART_COLORS = ['#6c8dfa', '#45c586', '#e3a648', '#c89bf8', '#68d4f5', '#f0565c', '#8aa5ff', '#f0a868'];
+
+type Timescale = 'month' | '3m' | '6m' | '12m' | 'all' | 'custom';
+
+const TIMESCALE_OPTIONS: { value: Timescale; label: string }[] = [
+  { value: 'month', label: 'This month' },
+  { value: '3m', label: '3 months' },
+  { value: '6m', label: '6 months' },
+  { value: '12m', label: '12 months' },
+  { value: 'all', label: 'All time' },
+  { value: 'custom', label: 'Custom' },
+];
+
+function monthsBetween(start: Date, end: Date): number {
+  return (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1;
+}
 
 interface HistoryPoint {
   year: number;
@@ -48,11 +63,23 @@ export function BudgetPage() {
   const [summary, setSummary] = useState<BudgetSummary | null>(null);
   const [categories, setCategories] = useState<BudgetCategory[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [entries, setEntries] = useState<BudgetEntry[]>([]);
+  const [bounds, setBounds] = useState<{ earliest: string | null; latest: string | null }>({
+    earliest: null,
+    latest: null,
+  });
   const [newCategory, setNewCategory] = useState('');
   const [newLimit, setNewLimit] = useState(0);
   const [entryCategory, setEntryCategory] = useState<number | null>(null);
   const [entryAmount, setEntryAmount] = useState(0);
   const [entryType, setEntryType] = useState<'expense' | 'income'>('expense');
+
+  const [timescale, setTimescale] = useState<Timescale>('month');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [transactionFilter, setTransactionFilter] = useState<number | 'all'>('all');
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 50;
 
   const [importing, setImporting] = useState(false);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
@@ -61,21 +88,53 @@ export function BudgetPage() {
   const [committing, setCommitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const range = useMemo(() => {
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    let start: Date;
+    let label: string;
+
+    if (timescale === 'month') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      label = now.toLocaleString([], { month: 'long', year: 'numeric' });
+    } else if (timescale === '3m' || timescale === '6m' || timescale === '12m') {
+      const n = timescale === '3m' ? 3 : timescale === '6m' ? 6 : 12;
+      start = new Date(now.getFullYear(), now.getMonth() - (n - 1), 1);
+      label = `Last ${n} months`;
+    } else if (timescale === 'all') {
+      start = bounds.earliest ? new Date(bounds.earliest) : new Date(now.getFullYear(), now.getMonth(), 1);
+      label = 'All time';
+    } else {
+      start = customStart ? new Date(customStart) : new Date(now.getFullYear(), now.getMonth(), 1);
+      const customEndDate = customEnd ? new Date(customEnd) : end;
+      label = 'Custom range';
+      return { start, end: customEndDate, label, months: Math.max(1, monthsBetween(start, customEndDate)) };
+    }
+    return { start, end, label, months: Math.max(1, monthsBetween(start, end)) };
+  }, [timescale, customStart, customEnd, bounds.earliest, now.getFullYear(), now.getMonth(), now.getDate()]);
+
   async function load() {
-    const [s, c, h] = await Promise.all([
-      api.get<BudgetSummary>(`/api/budget/summary?year=${now.getFullYear()}&month=${now.getMonth() + 1}`),
+    const startIso = range.start.toISOString();
+    const endIso = range.end.toISOString();
+    const [s, c, h, e, b] = await Promise.all([
+      api.get<BudgetSummary>(`/api/budget/summary?start=${startIso}&end=${endIso}`),
       api.get<BudgetCategory[]>('/api/budget/categories'),
-      api.get<{ points: HistoryPoint[] }>('/api/budget/history?months=6'),
+      api.get<{ points: HistoryPoint[] }>(`/api/budget/history?months=${Math.min(range.months, 36)}`),
+      api.get<BudgetEntry[]>(`/api/budget/entries?start=${startIso}&end=${endIso}`),
+      api.get<{ earliest: string | null; latest: string | null }>('/api/budget/bounds'),
     ]);
     setSummary(s);
     setCategories(c);
     setHistory(h.points);
+    setEntries(e);
+    setBounds(b);
     if (!entryCategory && c.length) setEntryCategory(c[0].id);
   }
 
   useEffect(() => {
+    setPage(0);
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.start.getTime(), range.end.getTime()]);
 
   async function addCategory(e: React.FormEvent) {
     e.preventDefault();
@@ -125,6 +184,11 @@ export function BudgetPage() {
     }
   }
 
+  async function deleteEntry(id: number) {
+    await api.delete(`/api/budget/entries/${id}`);
+    load();
+  }
+
   async function commitImport() {
     if (!importPreview) return;
     setCommitting(true);
@@ -148,34 +212,78 @@ export function BudgetPage() {
     .filter((cs) => cs.spent_cents > 0)
     .map((cs) => ({ name: cs.category.name, value: cs.spent_cents / 100 }));
 
+  const spansMultipleYears = history.length > 0 && history[0].year !== history[history.length - 1].year;
   const trendData = history.map((p) => ({
-    label: `${MONTH_NAMES[p.month - 1]}`,
+    label: spansMultipleYears ? `${MONTH_NAMES[p.month - 1]} '${String(p.year).slice(2)}` : MONTH_NAMES[p.month - 1],
     Spent: p.spent_cents / 100,
     Income: p.income_cents / 100,
   }));
 
-  const totalIncome = summary.by_category.length ? history[history.length - 1]?.income_cents ?? 0 : 0;
+  const totalSpent = entries.filter((e) => e.type === 'expense').reduce((a, e) => a + e.amount_cents, 0);
+  const totalIncome = entries.filter((e) => e.type === 'income').reduce((a, e) => a + e.amount_cents, 0);
+  const categoryById = new Map(categories.map((c) => [c.id, c]));
+
+  const earliestLabel = bounds.earliest ? new Date(bounds.earliest).toLocaleDateString() : null;
+  const latestLabel = bounds.latest ? new Date(bounds.latest).toLocaleDateString() : null;
+
+  const filteredEntries =
+    transactionFilter === 'all' ? entries : entries.filter((e) => e.category_id === transactionFilter);
+  const totalPages = Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE));
+  const pagedEntries = filteredEntries.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   return (
     <div>
-      <h1>Budget</h1>
-      <p className="page-subtitle">{now.toLocaleString([], { month: 'long', year: 'numeric' })}</p>
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4, flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h1>Budget</h1>
+          <p className="page-subtitle" style={{ marginBottom: 0 }}>
+            {range.label} · {entries.length} entries
+            {earliestLabel && latestLabel && (
+              <span style={{ color: 'var(--text-faint)' }}> · data from {earliestLabel} to {latestLabel}</span>
+            )}
+          </p>
+        </div>
+        <div className="row" style={{ background: 'var(--panel-2)', padding: 4, borderRadius: 10, border: '1px solid var(--border-soft)' }}>
+          {TIMESCALE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              className="btn btn-ghost"
+              style={{
+                padding: '6px 12px',
+                fontSize: 13,
+                background: timescale === opt.value ? 'var(--accent)' : 'transparent',
+                color: timescale === opt.value ? 'white' : 'var(--text-dim)',
+                fontWeight: timescale === opt.value ? 600 : 500,
+              }}
+              onClick={() => setTimescale(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-      <div className="grid-3" style={{ marginBottom: 20 }}>
+      {timescale === 'custom' && (
+        <div className="row" style={{ marginBottom: 20 }}>
+          <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
+          <span style={{ color: 'var(--text-dim)' }}>to</span>
+          <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
+        </div>
+      )}
+
+      <div className="grid-3" style={{ marginTop: 20, marginBottom: 20 }}>
         <div className="stat-tile">
-          <div className="label">Net this month</div>
+          <div className="label">Net ({range.label.toLowerCase()})</div>
           <div className="value" style={{ color: summary.net_cents >= 0 ? 'var(--success)' : 'var(--danger)' }}>
             {money(summary.net_cents)}
           </div>
         </div>
         <div className="stat-tile">
-          <div className="label">Spent this month</div>
-          <div className="value">
-            {money(summary.by_category.reduce((a, c) => a + c.spent_cents, 0))}
-          </div>
+          <div className="label">Spent</div>
+          <div className="value">{money(totalSpent)}</div>
         </div>
         <div className="stat-tile">
-          <div className="label">Income this month</div>
+          <div className="label">Income</div>
           <div className="value">{money(totalIncome)}</div>
         </div>
       </div>
@@ -352,6 +460,79 @@ export function BudgetPage() {
             )}
           </div>
         ))}
+      </div>
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+          <div className="card-title" style={{ marginBottom: 0 }}>
+            All entries ({entries.length})
+          </div>
+          <select value={transactionFilter} onChange={(e) => { setTransactionFilter(Number(e.target.value) || 'all'); setPage(0); }}>
+            <option value="all">All categories</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {filteredEntries.length === 0 ? (
+          <p style={{ color: 'var(--text-dim)', fontSize: 13 }}>No entries in this range.</p>
+        ) : (
+          <>
+            <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: 'var(--text-dim)', fontSize: 12 }}>
+                  <th style={{ padding: '6px 8px' }}>Date</th>
+                  <th style={{ padding: '6px 8px' }}>Category</th>
+                  <th style={{ padding: '6px 8px' }}>Type</th>
+                  <th style={{ padding: '6px 8px' }}>Note</th>
+                  <th style={{ padding: '6px 8px', textAlign: 'right' }}>Amount</th>
+                  <th style={{ padding: '6px 8px' }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pagedEntries.map((e) => (
+                  <tr key={e.id} style={{ borderTop: '1px solid var(--border-soft)' }}>
+                    <td style={{ padding: '6px 8px', color: 'var(--text-dim)' }}>
+                      {new Date(e.date).toLocaleDateString()}
+                    </td>
+                    <td style={{ padding: '6px 8px' }}>{categoryById.get(e.category_id)?.name ?? '—'}</td>
+                    <td style={{ padding: '6px 8px' }}>
+                      <span className={`badge ${e.type === 'income' ? 'badge-success' : ''}`}>{e.type}</span>
+                    </td>
+                    <td style={{ padding: '6px 8px', color: 'var(--text-dim)' }}>{e.note ?? ''}</td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
+                      {e.type === 'income' ? '+' : '−'}{money(e.amount_cents)}
+                    </td>
+                    <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ padding: '2px 8px', fontSize: 12 }}
+                        onClick={() => deleteEntry(e.id)}
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {totalPages > 1 && (
+              <div className="row" style={{ justifyContent: 'center', marginTop: 14 }}>
+                <button className="btn" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+                  Previous
+                </button>
+                <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+                  Page {page + 1} of {totalPages}
+                </span>
+                <button className="btn" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>
+                  Next
+                </button>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <div className="grid-2">

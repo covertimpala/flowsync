@@ -33,12 +33,21 @@ def create_category(body: BudgetCategoryCreate, session: Session = Depends(get_s
 
 
 @router.get("/entries", response_model=list[BudgetEntry])
-def list_entries(year: int, month: int, session: Session = Depends(get_session)):
-    start = datetime(year, month, 1)
-    end = datetime(year + (month == 12), (month % 12) + 1, 1)
+def list_entries(start: datetime, end: datetime, session: Session = Depends(get_session)):
     return session.exec(
         select(BudgetEntry).where(BudgetEntry.date >= start, BudgetEntry.date < end).order_by(BudgetEntry.date.desc())
     ).all()
+
+
+@router.get("/bounds")
+def bounds(session: Session = Depends(get_session)) -> dict:
+    """The earliest and latest entry dates in the database, so the
+    frontend can offer an accurate "All time" range and know how far back
+    there's anything to show."""
+    rows = session.exec(select(BudgetEntry.date)).all()
+    if not rows:
+        return {"earliest": None, "latest": None}
+    return {"earliest": min(rows).isoformat(), "latest": max(rows).isoformat()}
 
 
 @router.post("/entries", response_model=BudgetEntry)
@@ -60,8 +69,8 @@ def delete_entry(entry_id: int, session: Session = Depends(get_session)):
 
 
 @router.get("/summary")
-def summary(year: int, month: int, session: Session = Depends(get_session)) -> dict:
-    entries = list_entries(year, month, session)
+def summary(start: datetime, end: datetime, session: Session = Depends(get_session)) -> dict:
+    entries = list_entries(start, end, session)
     categories = session.exec(select(BudgetCategory)).all()
 
     by_category = []
