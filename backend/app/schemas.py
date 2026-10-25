@@ -68,6 +68,12 @@ class BudgetCategoryCreate(BaseModel):
     monthly_limit_cents: int = 0
 
 
+class BudgetCategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    monthly_limit_cents: Optional[int] = None
+    hidden: Optional[bool] = None
+
+
 class BudgetEntryCreate(BaseModel):
     category_id: int
     amount_cents: int

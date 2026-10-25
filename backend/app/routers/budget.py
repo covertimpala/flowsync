@@ -6,7 +6,7 @@ from sqlmodel import Session, select
 
 from ..db import get_session
 from ..models import BudgetCategory, BudgetEntry, BudgetEntryType
-from ..schemas import BudgetCategoryCreate, BudgetEntryCreate, BudgetEntryUpdate
+from ..schemas import BudgetCategoryCreate, BudgetCategoryUpdate, BudgetEntryCreate, BudgetEntryUpdate
 from ..security import require_api_key
 from ..services.excel_import import ExcelImportError, ParsedImport, parse_workbook
 from ..services.note_grouping import group_notes
@@ -21,8 +21,11 @@ _pending_imports: dict[str, ParsedImport] = {}
 
 
 @router.get("/categories", response_model=list[BudgetCategory])
-def list_categories(session: Session = Depends(get_session)):
-    return session.exec(select(BudgetCategory).order_by(BudgetCategory.name)).all()
+def list_categories(include_hidden: bool = False, session: Session = Depends(get_session)):
+    query = select(BudgetCategory)
+    if not include_hidden:
+        query = query.where(BudgetCategory.hidden == False)  # noqa: E712
+    return session.exec(query.order_by(BudgetCategory.name)).all()
 
 
 @router.post("/categories", response_model=BudgetCategory)
@@ -32,6 +35,36 @@ def create_category(body: BudgetCategoryCreate, session: Session = Depends(get_s
     session.commit()
     session.refresh(category)
     return category
+
+
+@router.patch("/categories/{category_id}", response_model=BudgetCategory)
+def update_category(category_id: int, body: BudgetCategoryUpdate, session: Session = Depends(get_session)):
+    category = session.get(BudgetCategory, category_id)
+    if not category:
+        raise HTTPException(404, "Category not found")
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(category, key, value)
+    session.add(category)
+    session.commit()
+    session.refresh(category)
+    return category
+
+
+@router.delete("/categories/{category_id}")
+def delete_category(category_id: int, session: Session = Depends(get_session)):
+    category = session.get(BudgetCategory, category_id)
+    if not category:
+        return {"ok": True}
+    in_use = session.exec(select(BudgetEntry).where(BudgetEntry.category_id == category_id).limit(1)).first()
+    if in_use:
+        raise HTTPException(
+            400,
+            "This category still has entries filed under it — hide it instead, "
+            "or delete those entries first.",
+        )
+    session.delete(category)
+    session.commit()
+    return {"ok": True}
 
 
 @router.get("/entries", response_model=list[BudgetEntry])
@@ -90,7 +123,7 @@ def delete_entry(entry_id: int, session: Session = Depends(get_session)):
 @router.get("/summary")
 def summary(start: datetime, end: datetime, session: Session = Depends(get_session)) -> dict:
     entries = list_entries(start=start, end=end, session=session)
-    categories = session.exec(select(BudgetCategory)).all()
+    categories = session.exec(select(BudgetCategory).where(BudgetCategory.hidden == False)).all()  # noqa: E712
 
     by_category = []
     net = 0

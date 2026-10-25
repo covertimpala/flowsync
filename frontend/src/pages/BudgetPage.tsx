@@ -1,4 +1,4 @@
-import { Eye, EyeOff, FileSpreadsheet, Upload } from 'lucide-react';
+import { Eye, EyeOff, FileSpreadsheet, Trash2, Upload } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area,
@@ -20,6 +20,11 @@ import { api } from '../api/client';
 import type { BudgetCategory, BudgetEntry, BudgetSummary } from '../types';
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+// Local calendar date as YYYY-MM-DD for a <input type="date">'s value —
+// not toISOString(), which is UTC-based and can land on the wrong day
+// near midnight depending on the timezone offset.
+const toDateInputValue = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
@@ -85,9 +90,13 @@ export function BudgetPage() {
   });
   const [newCategory, setNewCategory] = useState('');
   const [newLimit, setNewLimit] = useState(0);
+  const [showHiddenCategories, setShowHiddenCategories] = useState(false);
+  const [categoryError, setCategoryError] = useState<string | null>(null);
   const [entryCategory, setEntryCategory] = useState<number | null>(null);
   const [entryAmount, setEntryAmount] = useState(0);
   const [entryType, setEntryType] = useState<'expense' | 'income'>('expense');
+  const [entryDate, setEntryDate] = useState(() => toDateInputValue(new Date()));
+  const [entryNote, setEntryNote] = useState('');
 
   const [timescale, setTimescale] = useState<Timescale>('month');
   const [customStart, setCustomStart] = useState('');
@@ -132,7 +141,7 @@ export function BudgetPage() {
     const endIso = range.end.toISOString();
     const [s, c, h, e, b, a] = await Promise.all([
       api.get<BudgetSummary>(`/api/budget/summary?start=${startIso}&end=${endIso}`),
-      api.get<BudgetCategory[]>('/api/budget/categories'),
+      api.get<BudgetCategory[]>('/api/budget/categories?include_hidden=true'),
       api.get<{ granularity: HistoryGranularity; points: HistoryPoint[] }>(
         `/api/budget/history?start=${startIso}&end=${endIso}`,
       ),
@@ -147,7 +156,10 @@ export function BudgetPage() {
     setEntries(e);
     setBounds(b);
     setAnalytics(a);
-    if (!entryCategory && c.length) setEntryCategory(c[0].id);
+    if (!entryCategory) {
+      const firstVisible = c.find((cat) => !cat.hidden) ?? c[0];
+      if (firstVisible) setEntryCategory(firstVisible.id);
+    }
   }
 
   useEffect(() => {
@@ -172,10 +184,28 @@ export function BudgetPage() {
       category_id: entryCategory,
       amount_cents: Math.round(entryAmount * 100),
       type: entryType,
-      date: new Date().toISOString(),
+      date: new Date(entryDate).toISOString(),
+      note: entryNote.trim() || null,
     });
     setEntryAmount(0);
+    setEntryNote('');
+    setEntryDate(toDateInputValue(new Date()));
     load();
+  }
+
+  async function toggleHiddenCategory(id: number, hidden: boolean) {
+    await api.patch(`/api/budget/categories/${id}`, { hidden: !hidden });
+    load();
+  }
+
+  async function deleteCategory(id: number) {
+    setCategoryError(null);
+    try {
+      await api.delete(`/api/budget/categories/${id}`);
+      load();
+    } catch (err) {
+      setCategoryError(err instanceof ApiError ? err.message : String(err));
+    }
   }
 
   async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
@@ -582,7 +612,7 @@ export function BudgetPage() {
         <form className="card" onSubmit={addEntry} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div className="card-title" style={{ marginBottom: 0 }}>Add entry</div>
           <select value={entryCategory ?? ''} onChange={(e) => setEntryCategory(Number(e.target.value))}>
-            {categories.map((c) => (
+            {categories.filter((c) => !c.hidden).map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
@@ -596,20 +626,66 @@ export function BudgetPage() {
             value={entryAmount || ''}
             onChange={(e) => setEntryAmount(Number(e.target.value))}
           />
+          <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} />
+          <input
+            placeholder="Note (optional)"
+            value={entryNote}
+            onChange={(e) => setEntryNote(e.target.value)}
+          />
           <button className="btn btn-primary" type="submit">Add entry</button>
         </form>
 
-        <form className="card" onSubmit={addCategory} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div className="card-title" style={{ marginBottom: 0 }}>Add category</div>
-          <input placeholder="Name" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} />
-          <input
-            type="number"
-            placeholder="Monthly limit (optional)"
-            value={newLimit || ''}
-            onChange={(e) => setNewLimit(Number(e.target.value))}
-          />
-          <button className="btn" type="submit">Add category</button>
-        </form>
+        <div>
+          <form className="card" onSubmit={addCategory} style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+            <div className="card-title" style={{ marginBottom: 0 }}>Add category</div>
+            <input placeholder="Name" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} />
+            <input
+              type="number"
+              placeholder="Monthly limit (optional)"
+              value={newLimit || ''}
+              onChange={(e) => setNewLimit(Number(e.target.value))}
+            />
+            <button className="btn" type="submit">Add category</button>
+          </form>
+
+          <div className="card">
+            <div className="row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+              <div className="card-title" style={{ marginBottom: 0 }}>Manage categories</div>
+              {categories.some((c) => c.hidden) && (
+                <label className="row" style={{ fontSize: 12, color: 'var(--text-dim)', gap: 5, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={showHiddenCategories} onChange={(e) => setShowHiddenCategories(e.target.checked)} />
+                  Show hidden
+                </label>
+              )}
+            </div>
+            {categoryError && <p style={{ color: 'var(--danger)', fontSize: 12, marginTop: -4 }}>{categoryError}</p>}
+            {categories
+              .filter((c) => showHiddenCategories || !c.hidden)
+              .map((c) => (
+                <div key={c.id} className="row" style={{ justifyContent: 'space-between', padding: '5px 0', opacity: c.hidden ? 0.5 : 1 }}>
+                  <span style={{ fontSize: 13 }}>{c.name}</span>
+                  <div className="row" style={{ gap: 2 }}>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ padding: '2px 6px' }}
+                      title={c.hidden ? 'Unhide' : 'Hide'}
+                      onClick={() => toggleHiddenCategory(c.id, c.hidden)}
+                    >
+                      {c.hidden ? <Eye size={13} /> : <EyeOff size={13} />}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      style={{ padding: '2px 6px' }}
+                      title="Delete"
+                      onClick={() => deleteCategory(c.id)}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </div>
       </div>
 
       <div className="card" style={{ marginTop: 20 }}>

@@ -80,6 +80,7 @@ export interface BudgetCategory {
   id: number;
   name: string;
   monthly_limit_cents: number;
+  hidden: boolean;
 }
 
 export interface BudgetEntry {

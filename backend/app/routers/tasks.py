@@ -100,6 +100,20 @@ def update_task(task_id: int, body: TaskUpdate, session: Session = Depends(get_s
     return task
 
 
+@router.delete("/completed")
+def clear_completed(session: Session = Depends(get_session)) -> dict:
+    """Bulk-deletes every completed, confirmed task — the "Clear completed"
+    button on the Today page. Declared before DELETE /{task_id} so
+    "completed" is never mistaken for a task id."""
+    completed = session.exec(
+        select(Task).where(Task.status == ItemStatus.confirmed, Task.completed == True)  # noqa: E712
+    ).all()
+    for task in completed:
+        session.delete(task)
+    session.commit()
+    return {"deleted": len(completed)}
+
+
 @router.delete("/{task_id}")
 def delete_task(task_id: int, session: Session = Depends(get_session)):
     task = session.get(Task, task_id)

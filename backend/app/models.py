@@ -180,6 +180,10 @@ class BudgetCategory(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     monthly_limit_cents: int = 0
+    # Soft-hidden categories drop out of the picker and the breakdown list
+    # by default, without touching the entries already filed under them —
+    # see GET .../categories?include_hidden=.
+    hidden: bool = False
 
 
 class BudgetEntryType(str, Enum):

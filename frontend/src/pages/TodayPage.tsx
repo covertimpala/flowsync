@@ -1,4 +1,4 @@
-import { Plus, Sparkles } from 'lucide-react';
+import { Plus, Sparkles, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api/client';
 import { DayTimeline } from '../components/DayTimeline';
@@ -89,6 +89,11 @@ export function TodayPage() {
     load();
   }
 
+  async function clearCompleted() {
+    await api.delete('/api/tasks/completed');
+    load();
+  }
+
   async function askAi() {
     setAsking(true);
     setAiError(null);
@@ -105,6 +110,8 @@ export function TodayPage() {
   if (!schedule || !pending) return <p>Loading…</p>;
 
   const categoryById = new Map(categories.map((c) => [c.id, c]));
+  const hasCompleted =
+    schedule.planned.some((p) => p.task.completed) || schedule.unscheduled.some((t) => t.completed);
 
   return (
     <div>
@@ -129,13 +136,22 @@ export function TodayPage() {
       <PendingSection pending={pending} onChanged={load} />
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <div className="card-title">Timeline</div>
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <div className="card-title" style={{ marginBottom: 0 }}>Timeline</div>
+          {hasCompleted && (
+            <button className="btn btn-ghost" style={{ fontSize: 12, padding: '4px 8px' }} onClick={clearCompleted}>
+              <Trash2 size={12} /> Clear completed
+            </button>
+          )}
+        </div>
+        <div style={{ marginTop: 10 }}>
         <DayTimeline
           schedule={schedule}
           categoryById={categoryById}
           onToggleTask={toggleComplete}
           emptyLabel="Nothing scheduled yet."
         />
+        </div>
       </div>
 
       <form className="card" onSubmit={addTask} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
