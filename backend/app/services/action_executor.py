@@ -23,10 +23,14 @@ from ..models import (
     HabitLog,
     ItemStatus,
     PendingAction,
+    RecurrenceRule,
+    Reward,
     Task,
     TaskCategory,
     TaskPriority,
 )
+from .habit_rewards import available_points
+from .recurrence import next_occurrence
 
 
 class ActionError(Exception):
@@ -189,6 +193,116 @@ def _create_budget_category(session: Session, p: dict) -> dict:
     return {"category_id": category_id}
 
 
+# ---------------------------------------------------------------------------
+# Staged edits/deletes of EXISTING items — api_guard.stage_or_run routes an
+# external application's PATCH/DELETE here instead of applying it directly.
+# Distinct "api_*" payload shapes (an arbitrary `updates` dict matching the
+# router's own Update schema) from the AI-chat handlers above, which take
+# specific named fields the model reasons about directly.
+# ---------------------------------------------------------------------------
+
+_TASK_DATE_FIELDS = {"due_date", "scheduled_start", "scheduled_end", "completed_at"}
+
+
+def _api_update_task(session: Session, p: dict) -> dict:
+    task = session.get(Task, p["task_id"])
+    if not task:
+        raise ActionError(f"Task {p['task_id']} no longer exists")
+    updates = dict(p["updates"])
+    for key in _TASK_DATE_FIELDS:
+        if key in updates and updates[key] is not None:
+            updates[key] = _parse_dt(updates[key])
+    if updates.get("priority"):
+        updates["priority"] = TaskPriority(updates["priority"])
+    if updates.get("recurrence"):
+        updates["recurrence"] = RecurrenceRule(updates["recurrence"])
+    just_completed = updates.get("completed") is True and not task.completed
+    if "completed" in updates:
+        updates["completed_at"] = datetime.now() if updates["completed"] else None
+    for key, value in updates.items():
+        setattr(task, key, value)
+    session.add(task)
+    if just_completed and task.recurrence != RecurrenceRule.none:
+        next_due = next_occurrence(task.due_date or datetime.now(), task.recurrence)
+        session.add(Task(
+            title=task.title,
+            notes=task.notes,
+            due_date=next_due,
+            estimated_minutes=task.estimated_minutes,
+            priority=task.priority,
+            category_id=task.category_id,
+            recurrence=task.recurrence,
+            origin=task.origin,
+        ))
+    session.commit()
+    return {"task_id": task.id}
+
+
+def _api_redeem_reward(session: Session, p: dict) -> dict:
+    reward = session.get(Reward, p["reward_id"])
+    if not reward:
+        raise ActionError(f"Reward {p['reward_id']} no longer exists")
+    if reward.redeemed:
+        raise ActionError("That reward was already redeemed")
+    points = available_points(session)
+    if points < reward.point_cost:
+        raise ActionError(f"Need {reward.point_cost - points} more points to redeem this")
+    reward.redeemed = True
+    session.add(reward)
+    session.commit()
+    return {"reward_id": reward.id}
+
+
+def _api_update_budget_entry(session: Session, p: dict) -> dict:
+    entry = session.get(BudgetEntry, p["entry_id"])
+    if not entry:
+        raise ActionError(f"Budget entry {p['entry_id']} no longer exists")
+    updates = dict(p["updates"])
+    if updates.get("date"):
+        updates["date"] = _parse_dt(updates["date"])
+    if updates.get("type"):
+        updates["type"] = BudgetEntryType(updates["type"])
+    for key, value in updates.items():
+        setattr(entry, key, value)
+    session.add(entry)
+    session.commit()
+    return {"entry_id": entry.id}
+
+
+def _api_delete_budget_entry(session: Session, p: dict) -> dict:
+    entry = session.get(BudgetEntry, p["entry_id"])
+    if entry:
+        session.delete(entry)
+        session.commit()
+    return {"entry_id": p["entry_id"]}
+
+
+def _api_update_budget_category(session: Session, p: dict) -> dict:
+    category = session.get(BudgetCategory, p["category_id"])
+    if not category:
+        raise ActionError(f"Budget category {p['category_id']} no longer exists")
+    for key, value in p["updates"].items():
+        setattr(category, key, value)
+    session.add(category)
+    session.commit()
+    return {"category_id": category.id}
+
+
+def _api_delete_budget_category(session: Session, p: dict) -> dict:
+    category = session.get(BudgetCategory, p["category_id"])
+    if not category:
+        return {"category_id": p["category_id"]}
+    in_use = session.exec(select(BudgetEntry).where(BudgetEntry.category_id == category.id).limit(1)).first()
+    if in_use:
+        raise ActionError(
+            "This category still has entries filed under it — hide it instead, "
+            "or delete those entries first."
+        )
+    session.delete(category)
+    session.commit()
+    return {"category_id": category.id}
+
+
 _HANDLERS: dict[str, Callable[[Session, dict], dict]] = {
     "create_task": _create_task,
     "complete_task": _complete_task,
@@ -200,6 +314,12 @@ _HANDLERS: dict[str, Callable[[Session, dict], dict]] = {
     "complete_habit": _complete_habit,
     "create_budget_entry": _create_budget_entry,
     "create_budget_category": _create_budget_category,
+    "api_update_task": _api_update_task,
+    "api_redeem_reward": _api_redeem_reward,
+    "api_update_budget_entry": _api_update_budget_entry,
+    "api_delete_budget_entry": _api_delete_budget_entry,
+    "api_update_budget_category": _api_update_budget_category,
+    "api_delete_budget_category": _api_delete_budget_category,
 }
 
 

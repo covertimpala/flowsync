@@ -20,8 +20,19 @@ export function PendingSection({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
 
-  const total = pending.tasks.length + pending.events.length + pending.habits.length + pending.reschedules.length;
+  const total =
+    pending.tasks.length + pending.events.length + pending.habits.length + pending.reschedules.length + pending.actions.length;
   if (total === 0) return null;
+
+  async function resolveAction(planId: string, action: 'accept' | 'deny') {
+    setBusy(`action-${planId}`);
+    try {
+      await api.post(`/api/ai/command/${planId}/${action}`);
+      onChanged();
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function accept(kind: 'task' | 'event' | 'habit', id: number, pushToCalendar = false) {
     setBusy(`${kind}-${id}`);
@@ -105,6 +116,16 @@ export function PendingSection({
             <Actions
               onAccept={() => resolveReschedule(r.id, 'accept')}
               onDeny={() => resolveReschedule(r.id, 'deny')}
+            />
+          </Row>
+        ))}
+        {pending.actions.map((a) => (
+          <Row key={`action-${a.id}`} busy={busy === `action-${a.plan_id}`}>
+            <span className="badge badge-api">from API</span>
+            <span>{a.description}</span>
+            <Actions
+              onAccept={() => resolveAction(a.plan_id, 'accept')}
+              onDeny={() => resolveAction(a.plan_id, 'deny')}
             />
           </Row>
         ))}

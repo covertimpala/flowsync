@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from ..models import Habit, HabitFrequency
+from sqlmodel import Session, select
+
+from ..models import Habit, HabitLog, HabitFrequency, Reward
 
 
 def is_due(habit: Habit, day: datetime) -> bool:
@@ -28,3 +30,12 @@ def mark_completed(habit: Habit, day: datetime, previous_completion_day: datetim
     new_streak = habit.current_streak + 1 if consecutive else 1
     habit.current_streak = new_streak
     habit.best_streak = max(new_streak, habit.best_streak)
+
+
+def available_points(session: Session) -> int:
+    earned = 0
+    for habit in session.exec(select(Habit)).all():
+        log_count = len(session.exec(select(HabitLog).where(HabitLog.habit_id == habit.id)).all())
+        earned += log_count * habit.points_per_completion
+    spent = sum(r.point_cost for r in session.exec(select(Reward).where(Reward.redeemed == True)).all())  # noqa: E712
+    return earned - spent

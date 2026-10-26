@@ -5,10 +5,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import Habit, HabitLog, ItemStatus, Reward, TaskOrigin
+from ..models import Habit, HabitLog, ItemStatus, PendingAction, Reward, TaskOrigin
 from ..schemas import HabitCreate, RewardCreate
 from ..security import require_api_key
-from ..services.habit_rewards import mark_completed
+from ..services.api_guard import stage_or_run
+from ..services.habit_rewards import available_points, mark_completed
 
 router = APIRouter(prefix="/api/habits", tags=["habits"], dependencies=[Depends(require_api_key)])
 
@@ -40,47 +41,54 @@ def create_habit(
     return habit
 
 
-@router.post("/{habit_id}/complete", response_model=Habit)
-def complete_habit(habit_id: int, session: Session = Depends(get_session)):
+@router.post("/{habit_id}/complete")
+def complete_habit(
+    habit_id: int,
+    x_client_name: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
     habit = session.get(Habit, habit_id)
     if not habit:
         raise HTTPException(404, "Habit not found")
 
-    today = datetime.now()
-    already = session.exec(
-        select(HabitLog).where(
-            HabitLog.habit_id == habit_id,
-            HabitLog.completed_on >= today.replace(hour=0, minute=0, second=0, microsecond=0),
-        )
-    ).first()
-    if already:
+    def apply() -> Habit:
+        today = datetime.now()
+        already = session.exec(
+            select(HabitLog).where(
+                HabitLog.habit_id == habit_id,
+                HabitLog.completed_on >= today.replace(hour=0, minute=0, second=0, microsecond=0),
+            )
+        ).first()
+        if already:
+            return habit
+
+        last_log = session.exec(
+            select(HabitLog).where(HabitLog.habit_id == habit_id).order_by(HabitLog.completed_on.desc())
+        ).first()
+        previous = last_log.completed_on if last_log else None
+
+        session.add(HabitLog(habit_id=habit_id, completed_on=today))
+        mark_completed(habit, today, previous)
+        session.add(habit)
+        session.commit()
+        session.refresh(habit)
         return habit
 
-    last_log = session.exec(
-        select(HabitLog).where(HabitLog.habit_id == habit_id).order_by(HabitLog.completed_on.desc())
-    ).first()
-    previous = last_log.completed_on if last_log else None
-
-    session.add(HabitLog(habit_id=habit_id, completed_on=today))
-    mark_completed(habit, today, previous)
-    session.add(habit)
-    session.commit()
-    session.refresh(habit)
-    return habit
-
-
-def _available_points(session: Session) -> int:
-    earned = 0
-    for habit in session.exec(select(Habit)).all():
-        log_count = len(session.exec(select(HabitLog).where(HabitLog.habit_id == habit.id)).all())
-        earned += log_count * habit.points_per_completion
-    spent = sum(r.point_cost for r in session.exec(select(Reward).where(Reward.redeemed == True)).all())  # noqa: E712
-    return earned - spent
+    result = stage_or_run(
+        session, x_client_name,
+        action_type="complete_habit",
+        description=f'Mark habit "{habit.name}" complete for today',
+        payload={"habit_id": habit_id},
+        direct=apply,
+    )
+    if isinstance(result, PendingAction):
+        return {"pending": True, "action_id": result.id, "plan_id": result.plan_id, "description": result.description}
+    return result
 
 
 @router.get("/points")
-def available_points(session: Session = Depends(get_session)) -> dict:
-    return {"points": _available_points(session)}
+def get_available_points(session: Session = Depends(get_session)) -> dict:
+    return {"points": available_points(session)}
 
 
 @router.get("/rewards", response_model=list[Reward])
@@ -97,16 +105,33 @@ def create_reward(body: RewardCreate, session: Session = Depends(get_session)):
     return reward
 
 
-@router.post("/rewards/{reward_id}/redeem", response_model=Reward)
-def redeem_reward(reward_id: int, session: Session = Depends(get_session)):
+@router.post("/rewards/{reward_id}/redeem")
+def redeem_reward(
+    reward_id: int,
+    x_client_name: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
     reward = session.get(Reward, reward_id)
     if not reward:
         raise HTTPException(404, "Reward not found")
-    points = _available_points(session)
-    if points < reward.point_cost:
-        raise HTTPException(400, f"Need {reward.point_cost - points} more points")
-    reward.redeemed = True
-    session.add(reward)
-    session.commit()
-    session.refresh(reward)
-    return reward
+
+    def apply() -> Reward:
+        points = available_points(session)
+        if points < reward.point_cost:
+            raise HTTPException(400, f"Need {reward.point_cost - points} more points")
+        reward.redeemed = True
+        session.add(reward)
+        session.commit()
+        session.refresh(reward)
+        return reward
+
+    result = stage_or_run(
+        session, x_client_name,
+        action_type="api_redeem_reward",
+        description=f'Redeem reward "{reward.name}" for {reward.point_cost} points',
+        payload={"reward_id": reward_id},
+        direct=apply,
+    )
+    if isinstance(result, PendingAction):
+        return {"pending": True, "action_id": result.id, "plan_id": result.plan_id, "description": result.description}
+    return result

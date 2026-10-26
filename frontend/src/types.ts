@@ -109,6 +109,7 @@ export interface PendingInbox {
   events: CalendarEvent[];
   habits: Habit[];
   reschedules: RescheduleSuggestion[];
+  actions: ProposedAction[];
 }
 
 export interface ScheduleResponse {

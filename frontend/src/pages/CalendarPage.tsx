@@ -179,6 +179,12 @@ export function CalendarPage() {
     load();
   }
 
+  async function disconnect(provider: 'google' | 'outlook') {
+    await api.post(`/api/calendar/${provider}/disconnect`);
+    setSyncMessage(`Disconnected ${provider === 'google' ? 'Google Calendar' : 'Outlook'}`);
+    load();
+  }
+
   type DayItem = { kind: 'event'; event: CalendarEvent; time: string } | { kind: 'task'; task: Task; time: string };
 
   const groups = useMemo(() => {
@@ -267,6 +273,7 @@ export function CalendarPage() {
           busy={connecting === 'google'}
           onConnect={() => connect('google')}
           onClientId={(id) => setClientId('google', id)}
+          onDisconnect={() => disconnect('google')}
         />
         <ProviderRow
           name="Outlook / Microsoft 365"
@@ -274,6 +281,7 @@ export function CalendarPage() {
           busy={connecting === 'outlook'}
           onConnect={() => connect('outlook')}
           onClientId={(id) => setClientId('outlook', id)}
+          onDisconnect={() => disconnect('outlook')}
         />
         <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
           <button className="btn" onClick={syncNow}>
@@ -391,12 +399,14 @@ function ProviderRow({
   busy,
   onConnect,
   onClientId,
+  onDisconnect,
 }: {
   name: string;
   status: { has_client_id: boolean; connected: boolean } | null;
   busy: boolean;
   onConnect: () => void;
   onClientId: (id: string) => void;
+  onDisconnect: () => void;
 }) {
   const [clientId, setClientId] = useState('');
 
@@ -404,7 +414,12 @@ function ProviderRow({
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0' }}>
       <span style={{ width: 200 }}>{name}</span>
       {status?.connected ? (
-        <span className="badge badge-success">Connected</span>
+        <>
+          <span className="badge badge-success">Connected</span>
+          <button className="btn btn-ghost" onClick={onDisconnect}>
+            Disconnect
+          </button>
+        </>
       ) : status?.has_client_id ? (
         <button className="btn" onClick={onConnect} disabled={busy}>
           {busy ? 'Connecting…' : 'Connect'}

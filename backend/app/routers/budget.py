@@ -1,13 +1,15 @@
 from datetime import datetime, timedelta
+from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import BudgetCategory, BudgetEntry, BudgetEntryType
+from ..models import BudgetCategory, BudgetEntry, BudgetEntryType, PendingAction
 from ..schemas import BudgetCategoryCreate, BudgetCategoryUpdate, BudgetEntryCreate, BudgetEntryUpdate
 from ..security import require_api_key
+from ..services.api_guard import json_safe, stage_or_run
 from ..services.excel_import import ExcelImportError, ParsedImport, parse_workbook
 from ..services.note_grouping import group_notes
 from ..time_utils import as_naive_local
@@ -28,43 +30,96 @@ def list_categories(include_hidden: bool = False, session: Session = Depends(get
     return session.exec(query.order_by(BudgetCategory.name)).all()
 
 
-@router.post("/categories", response_model=BudgetCategory)
-def create_category(body: BudgetCategoryCreate, session: Session = Depends(get_session)):
-    category = BudgetCategory(**body.model_dump())
-    session.add(category)
-    session.commit()
-    session.refresh(category)
-    return category
+@router.post("/categories")
+def create_category(
+    body: BudgetCategoryCreate,
+    x_client_name: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
+    def apply() -> BudgetCategory:
+        category = BudgetCategory(**body.model_dump())
+        session.add(category)
+        session.commit()
+        session.refresh(category)
+        return category
+
+    result = stage_or_run(
+        session, x_client_name,
+        action_type="create_budget_category",
+        description=f'Add budget category "{body.name}"',
+        payload={"name": body.name, "monthly_limit_cents": body.monthly_limit_cents},
+        direct=apply,
+    )
+    if isinstance(result, PendingAction):
+        return {"pending": True, "action_id": result.id, "plan_id": result.plan_id, "description": result.description}
+    return result
 
 
-@router.patch("/categories/{category_id}", response_model=BudgetCategory)
-def update_category(category_id: int, body: BudgetCategoryUpdate, session: Session = Depends(get_session)):
+@router.patch("/categories/{category_id}")
+def update_category(
+    category_id: int,
+    body: BudgetCategoryUpdate,
+    x_client_name: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
     category = session.get(BudgetCategory, category_id)
     if not category:
         raise HTTPException(404, "Category not found")
-    for key, value in body.model_dump(exclude_unset=True).items():
-        setattr(category, key, value)
-    session.add(category)
-    session.commit()
-    session.refresh(category)
-    return category
+    updates = body.model_dump(exclude_unset=True)
+
+    def apply() -> BudgetCategory:
+        for key, value in updates.items():
+            setattr(category, key, value)
+        session.add(category)
+        session.commit()
+        session.refresh(category)
+        return category
+
+    changed = ", ".join(updates) or "fields"
+    result = stage_or_run(
+        session, x_client_name,
+        action_type="api_update_budget_category",
+        description=f'Update budget category "{category.name}" ({changed})',
+        payload={"category_id": category_id, "updates": updates},
+        direct=apply,
+    )
+    if isinstance(result, PendingAction):
+        return {"pending": True, "action_id": result.id, "plan_id": result.plan_id, "description": result.description}
+    return result
 
 
 @router.delete("/categories/{category_id}")
-def delete_category(category_id: int, session: Session = Depends(get_session)):
+def delete_category(
+    category_id: int,
+    x_client_name: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
     category = session.get(BudgetCategory, category_id)
     if not category:
         return {"ok": True}
-    in_use = session.exec(select(BudgetEntry).where(BudgetEntry.category_id == category_id).limit(1)).first()
-    if in_use:
-        raise HTTPException(
-            400,
-            "This category still has entries filed under it — hide it instead, "
-            "or delete those entries first.",
-        )
-    session.delete(category)
-    session.commit()
-    return {"ok": True}
+
+    def apply() -> dict:
+        in_use = session.exec(select(BudgetEntry).where(BudgetEntry.category_id == category_id).limit(1)).first()
+        if in_use:
+            raise HTTPException(
+                400,
+                "This category still has entries filed under it — hide it instead, "
+                "or delete those entries first.",
+            )
+        session.delete(category)
+        session.commit()
+        return {"ok": True}
+
+    result = stage_or_run(
+        session, x_client_name,
+        action_type="api_delete_budget_category",
+        description=f'Delete budget category "{category.name}"',
+        payload={"category_id": category_id},
+        direct=apply,
+    )
+    if isinstance(result, PendingAction):
+        return {"pending": True, "action_id": result.id, "plan_id": result.plan_id, "description": result.description}
+    return result
 
 
 @router.get("/entries", response_model=list[BudgetEntry])
@@ -78,17 +133,37 @@ def list_entries(
     return session.exec(query.order_by(BudgetEntry.date.desc())).all()
 
 
-@router.patch("/entries/{entry_id}", response_model=BudgetEntry)
-def update_entry(entry_id: int, body: BudgetEntryUpdate, session: Session = Depends(get_session)):
+@router.patch("/entries/{entry_id}")
+def update_entry(
+    entry_id: int,
+    body: BudgetEntryUpdate,
+    x_client_name: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
     entry = session.get(BudgetEntry, entry_id)
     if not entry:
         raise HTTPException(404, "Entry not found")
-    for key, value in body.model_dump(exclude_unset=True).items():
-        setattr(entry, key, value)
-    session.add(entry)
-    session.commit()
-    session.refresh(entry)
-    return entry
+    updates = body.model_dump(exclude_unset=True)
+
+    def apply() -> BudgetEntry:
+        for key, value in updates.items():
+            setattr(entry, key, value)
+        session.add(entry)
+        session.commit()
+        session.refresh(entry)
+        return entry
+
+    changed = ", ".join(updates) or "fields"
+    result = stage_or_run(
+        session, x_client_name,
+        action_type="api_update_budget_entry",
+        description=f'Update budget entry "{entry.note or entry.type.value}" (${entry.amount_cents / 100:.2f}) — {changed}',
+        payload={"entry_id": entry_id, "updates": json_safe(updates)},
+        direct=apply,
+    )
+    if isinstance(result, PendingAction):
+        return {"pending": True, "action_id": result.id, "plan_id": result.plan_id, "description": result.description}
+    return result
 
 
 @router.get("/bounds")
@@ -102,22 +177,62 @@ def bounds(session: Session = Depends(get_session)) -> dict:
     return {"earliest": min(rows).isoformat(), "latest": max(rows).isoformat()}
 
 
-@router.post("/entries", response_model=BudgetEntry)
-def create_entry(body: BudgetEntryCreate, session: Session = Depends(get_session)):
-    entry = BudgetEntry(**body.model_dump())
-    session.add(entry)
-    session.commit()
-    session.refresh(entry)
-    return entry
+@router.post("/entries")
+def create_entry(
+    body: BudgetEntryCreate,
+    x_client_name: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
+    def apply() -> BudgetEntry:
+        entry = BudgetEntry(**body.model_dump())
+        session.add(entry)
+        session.commit()
+        session.refresh(entry)
+        return entry
+
+    result = stage_or_run(
+        session, x_client_name,
+        action_type="create_budget_entry",
+        description=f'Add {body.type.value} of ${body.amount_cents / 100:.2f}' + (f' — "{body.note}"' if body.note else ""),
+        payload={
+            "category_id": body.category_id,
+            "amount_cents": body.amount_cents,
+            "type": body.type.value,
+            "date": body.date.isoformat(),
+            "note": body.note,
+        },
+        direct=apply,
+    )
+    if isinstance(result, PendingAction):
+        return {"pending": True, "action_id": result.id, "plan_id": result.plan_id, "description": result.description}
+    return result
 
 
 @router.delete("/entries/{entry_id}")
-def delete_entry(entry_id: int, session: Session = Depends(get_session)):
+def delete_entry(
+    entry_id: int,
+    x_client_name: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
     entry = session.get(BudgetEntry, entry_id)
-    if entry:
+    if not entry:
+        return {"ok": True}
+
+    def apply() -> dict:
         session.delete(entry)
         session.commit()
-    return {"ok": True}
+        return {"ok": True}
+
+    result = stage_or_run(
+        session, x_client_name,
+        action_type="api_delete_budget_entry",
+        description=f'Delete budget entry "{entry.note or entry.type.value}" (${entry.amount_cents / 100:.2f})',
+        payload={"entry_id": entry_id},
+        direct=apply,
+    )
+    if isinstance(result, PendingAction):
+        return {"pending": True, "action_id": result.id, "plan_id": result.plan_id, "description": result.description}
+    return result
 
 
 @router.get("/summary")

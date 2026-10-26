@@ -224,6 +224,12 @@ class PendingAction(SQLModel, table=True):
     payload_json: str
     status: ItemStatus = ItemStatus.pending
     created_at: NaiveDatetime
+    # Set to the caller's X-Client-Name when an external application's edit
+    # or delete was staged here for review instead of applied immediately
+    # (see services/api_guard.py). None for a plan the AI Assistant drafted
+    # from a person's own chat message — that's reviewed on the Assistant
+    # page instead of the main Pending inbox.
+    created_by: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

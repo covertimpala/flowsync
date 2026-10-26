@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import CalendarEvent, CalendarSource, ItemStatus
+from ..models import CalendarEvent, CalendarSource, ItemStatus, PendingAction
 from ..schemas import EventCreate, IcsImportRequest
 from ..security import require_api_key
+from ..services.api_guard import stage_or_run
 from ..services.ics_import import parse_ics
 from ..time_utils import as_naive_local
 
@@ -60,13 +61,30 @@ def create_event(
 
 
 @router.delete("/{event_id}")
-def delete_event(event_id: int, session: Session = Depends(get_session)):
+def delete_event(
+    event_id: int,
+    x_client_name: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
+):
     event = session.get(CalendarEvent, event_id)
     if not event:
         raise HTTPException(404, "Event not found")
-    session.delete(event)
-    session.commit()
-    return {"ok": True}
+
+    def apply() -> dict:
+        session.delete(event)
+        session.commit()
+        return {"ok": True}
+
+    result = stage_or_run(
+        session, x_client_name,
+        action_type="delete_event",
+        description=f'Delete event "{event.title}" on {event.start.strftime("%b %d")}',
+        payload={"event_id": event_id},
+        direct=apply,
+    )
+    if isinstance(result, PendingAction):
+        return {"pending": True, "action_id": result.id, "plan_id": result.plan_id, "description": result.description}
+    return result
 
 
 @router.post("/import-ics", response_model=list[CalendarEvent])

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import CalendarEvent, Habit, ItemStatus, RescheduleSuggestion, Task
+from ..models import CalendarEvent, Habit, ItemStatus, PendingAction, RescheduleSuggestion, Task
 from ..schemas import AcceptRequest
 from ..security import require_api_key
 from ..services import google_calendar, outlook_calendar, settings_store
@@ -54,11 +54,22 @@ def list_pending(session: Session = Depends(get_session)) -> dict:
             "reason": r.reason,
         })
 
+    # Edits/deletes an external application made to something that already
+    # exists — staged by services/api_guard.py instead of applied directly.
+    # Distinguished from an AI Assistant chat plan (also a PendingAction,
+    # reviewed on the Assistant page instead) by having a created_by.
+    staged_actions = session.exec(
+        select(PendingAction)
+        .where(PendingAction.status == ItemStatus.pending, PendingAction.created_by != None)  # noqa: E711
+        .order_by(PendingAction.id)
+    ).all()
+
     return {
         "tasks": session.exec(select(Task).where(Task.status == ItemStatus.pending)).all(),
         "events": session.exec(select(CalendarEvent).where(CalendarEvent.status == ItemStatus.pending)).all(),
         "habits": session.exec(select(Habit).where(Habit.status == ItemStatus.pending)).all(),
         "reschedules": reschedule_payload,
+        "actions": staged_actions,
     }
 
 
